@@ -1,0 +1,72 @@
+# vimBot settings — overrides built-in defaults.
+#
+#   CLI flag  >  this file  >  built-in default
+#
+# Every key below is COMMENTED OUT and shows its built-in default, so an
+# uncommented line always means "I am deliberately overriding something".
+# The defaults themselves live in src/settings.py (DEFAULTS) — this file
+# never needs to be edited to keep them in sync.
+#
+# Unknown sections, unknown keys, and wrong types are hard errors at startup,
+# so a typo like `timout = 10` fails loudly instead of silently doing nothing.
+#
+# Point any entry point at a different file with --settings <path>, and see
+# what is actually in effect with:
+#     python src/executor.py --show-settings
+
+
+[executor]
+# Wall-clock seconds allowed per vim run before the process is killed.
+# Raise on slow hardware or in a loaded container; lower to fail fast.
+# timeout = 50.0
+
+# Which vim binary to invoke. In a container this is often an explicit path
+# (e.g. "/usr/bin/vim.basic") rather than whatever PATH resolves to.
+# Must be real vim, not vim-tiny.
+# vim_bin = "vim"
+
+# Default command mode when none is given: "ex" or "keys".
+# mode = "ex"
+
+# What to do when an --output / output_path file already exists:
+#   "refuse"    raise and write nothing  (safe default)
+#   "overwrite" replace it
+#   "suffix"    write out_1.txt, out_2.txt, ... — never overwrites
+# on_exists = "refuse"
+
+
+[generate]
+# Validation limits for candidate tuples in the data pipeline. A candidate
+# whose buffer or command exceeds these is rejected with reason "parse".
+# max_buffer_lines = 60
+# max_command_len = 200
+
+# Recorded on every generated case as the `teacher` field, so the provenance
+# of a dataset row survives into RESULTS.md and the write-up.
+# teacher = "claude-fable-5-in-session"
+
+
+[splits]
+# Target size band for the held-out test slice (CLAUDE.md §7.3: 300–500).
+# build_splits.py exits nonzero if the result falls outside this band,
+# unless --smoke is passed for pilot-scale corpora.
+# test_min = 300
+# test_max = 500
+
+# Fraction of all cases allocated to validation.
+# val_frac = 0.10
+
+# Minimum number of test cases flagged needs_review for human verification.
+# review_min = 150
+
+# Seed for split allocation. Changing this reshuffles train/val/test —
+# do not change it mid-project without recording why in DECISIONS.md.
+# seed = 13
+
+
+[stats]
+# How many random samples dataset_stats.py embeds in data/stats.md.
+# samples = 10
+
+# Seed for that sampling, so the report is reproducible.
+# seed = 13
