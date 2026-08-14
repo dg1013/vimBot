@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# W&B local run cache (runs are logged to the cloud; §8)
+wandb/
