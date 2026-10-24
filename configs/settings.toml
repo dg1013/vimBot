@@ -1,6 +1,6 @@
 # vimBot settings — overrides built-in defaults.
 #
-#   CLI flag  >  this file  >  built-in default
+#   CLI (command-line interface) flag  >  this file  >  built-in default
 #
 # Every key below is COMMENTED OUT and shows its built-in default, so an
 # uncommented line always means "I am deliberately overriding something".
@@ -16,6 +16,21 @@
 
 
 [executor]
+# OS (operating system) boundary for the vim subprocess. "namespace" uses an unprivileged user +
+# mount namespace where everything but the sandbox temp dir (directory) is read-only, and
+# warns if that is unavailable; "required" refuses to run without it; "none"
+# disables it, leaving src/scope.py as the only protection.
+#
+# Set to "required" 2026-08-27 (owner). The "namespace" default degrades
+# quietly: one warning on stderr, then vim runs with no OS boundary at all,
+# leaving src/scope.py as the only protection -- and two audits have now found
+# six gaps in that screen, so it is not something to fall back to silently.
+# The cost here is zero (the probe reports the namespace available on this
+# machine), so this only bites where the boundary genuinely is not there:
+# macOS, hardened kernels, and unprivileged CI (continuous integration) containers. Failing loudly
+# there is the point -- the §9 GRPO (Group Relative Policy Optimization) reward pool is exactly where a silent
+# fallback would matter most and be least likely to be noticed.
+isolation = "required"
 # Wall-clock seconds allowed per vim run before the process is killed.
 # Raise on slow hardware or in a loaded container; lower to fail fast.
 # timeout = 50.0
@@ -27,12 +42,6 @@
 
 # Default command mode when none is given: "ex" or "keys".
 # mode = "ex"
-
-# What to do when an --output / output_path file already exists:
-#   "refuse"    raise and write nothing  (safe default)
-#   "overwrite" replace it
-#   "suffix"    write out_1.txt, out_2.txt, ... — never overwrites
-# on_exists = "refuse"
 
 
 [generate]

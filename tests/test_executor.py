@@ -23,11 +23,12 @@ import pytest
 from executor import convert_keys, run_vim, run_vim_on_file
 
 REPO = Path(__file__).resolve().parents[1]
+SEED = REPO / "data" / "seed_cases.jsonl"
 CASES = [
     json.loads(line)
-    for line in (REPO / "data" / "seed_cases.jsonl").read_text().splitlines()
+    for line in SEED.read_text().splitlines()
     if line.strip()
-]
+] if SEED.exists() else []
 
 
 def _norm(text):
@@ -41,6 +42,7 @@ def _norm(text):
 
 # ---------------------------------------------------------------- gold cases
 
+@pytest.mark.skipif(not SEED.exists(), reason=f"{SEED} not present")
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
 def test_gold_case_executes_to_expected_buffer(case):
     result = run_vim(
@@ -90,10 +92,20 @@ def test_write_to_arbitrary_path_is_blocked_keys_mode():
 
 
 def test_infinite_loop_hits_timeout():
+    # `while 1 | endwhile` used to be the hang here; :while became a screened
+    # expression context on 2026-08-18, so it no longer reaches vim. The
+    # invariant under test is the hard wall clock, not the hanging command --
+    # :sleep hangs just as well and is still in scope.
     t0 = time.time()
-    r = run_vim(BUF, "while 1 | endwhile", mode="ex", timeout=3)
+    r = run_vim(BUF, "sleep 30", mode="ex", timeout=3)
     assert r["timeout"] is True
     assert time.time() - t0 >= 2.5
+
+
+def test_vimscript_loop_is_screened_before_it_can_hang():
+    r = run_vim(BUF, "while 1 | endwhile", mode="ex", timeout=3)
+    assert r["blocked"] is not None
+    assert r["was_valid"] is False
 
 
 def test_buffer_is_recoverable_after_partial_keys():
@@ -120,7 +132,7 @@ def test_executor_runs_a_real_vim_process():
 # `set nrformats-=octal`. Left alone, the sandbox reads 007 as octal
 # (<C-a> -> 010) while every editor a user actually runs -- vim loading
 # defaults.vim, and neovim -- gives 008. That is a silent train/serve
-# mismatch: the GRPO reward oracle, the MCP server and the neovim plugin
+# mismatch: the GRPO (Group Relative Policy Optimization) reward oracle, the MCP (Model Context Protocol) server and the neovim plugin
 # would disagree about a single keystroke. executor._OPTION_BASELINE pins the
 # behaviour the real editors share; these two tests pin it in both modes.
 
@@ -141,6 +153,52 @@ def test_option_baseline_reaches_ex_mode_too():
     nrformats = _norm(r["buffer_after"])[1]
     assert "octal" not in nrformats, f"octal still enabled in ex mode: {nrformats}"
     assert "hex" in nrformats, f"baseline clobbered nrformats entirely: {nrformats}"
+
+
+# A MEASURED LIMIT, not a pin (2026-08-26). With textwidth at its default 0,
+# `gq` wraps at min(columns, 79), so reflow gold depends on the COLUMNS
+# environment variable rather than on any vim setting. Pinning textwidth in
+# _OPTION_BASELINE was tried and rejected -- it also drives insert-mode
+# auto-wrap and broke hc-0663's `cis`. The convention is that a reflow case
+# states its own width. These two tests pin both halves: the hazard, so nobody
+# rediscovers it, and the fix that dataset rows are expected to use.
+
+_LONG = ("The importer reads the whole file into memory before validating any "
+         "of it, which is fine for the sample data but falls over in prod.")
+
+
+def _reflow_at(columns, keys):
+    import os
+    before = os.environ.get("COLUMNS")
+    os.environ["COLUMNS"] = columns
+    try:
+        return _norm(run_vim(_LONG, keys, mode="keys")["buffer_after"])
+    finally:
+        if before is None:
+            os.environ.pop("COLUMNS", None)
+        else:
+            os.environ["COLUMNS"] = before
+
+
+def test_bare_gq_wrap_depends_on_terminal_width():
+    """Known limit: a gq gold with no explicit textwidth is not portable."""
+    narrow = _reflow_at("40", "gqq")
+    wide = _reflow_at("100", "gqq")
+    assert narrow != wide, (
+        "bare gq no longer varies with COLUMNS -- if textwidth was pinned in "
+        "_OPTION_BASELINE, check hc-0663 and the insert-edit category first, "
+        "then delete this test and its note in executor.py"
+    )
+    assert all(len(line) <= 39 for line in narrow), narrow
+
+
+def test_case_supplied_textwidth_makes_reflow_portable():
+    """The convention reflow rows follow: state the width in the command."""
+    at40 = _reflow_at("40", ":set tw=60\rgqq")
+    at100 = _reflow_at("100", ":set tw=60\rgqq")
+    assert at40 == at100, (at40, at100)
+    assert all(len(line) <= 60 for line in at40), at40
+    assert len(at40) > 1, at40
 
 
 # ---------------------------------------------------- sandbox-escape screening
@@ -207,7 +265,6 @@ def test_file_input_applies_command(tmp_path):
     assert r["was_valid"] is True
     assert _norm(r["buffer_after"]) == ["the dog sat", "a dog too"]
     assert r["source_path"] == str(src)
-    assert r["written_to"] is None
 
 
 def test_file_input_never_modifies_the_source(tmp_path):
@@ -250,101 +307,23 @@ def test_file_input_sandbox_still_blocks_writes(tmp_path):
     assert src.read_text() == "data\n"
 
 
-def test_file_input_output_path_writes_result(tmp_path):
+def test_executor_never_leaves_a_file_behind(tmp_path):
+    # Owner decision 2026-09-04: the executor writes no files. A valid run
+    # and a failing run against a file leave the directory holding exactly
+    # the source, unchanged; the result exists only in the returned dict.
     src = tmp_path / "in.txt"
     src.write_text("one\ntwo\n")
-    out = tmp_path / "out.txt"
-    r = run_vim_on_file(src, "%s/two/three/", mode="ex", output_path=out)
-    assert r["written_to"] == str(out)
-    assert out.read_text() == "one\nthree\n"
+    ok = run_vim_on_file(src, "%s/two/three/", mode="ex")
+    assert ok["was_valid"] is True
+    assert _norm(ok["buffer_after"]) == ["one", "three"]
+    bad = run_vim_on_file(src, "%s/unclosed", mode="ex")
+    assert bad["was_valid"] is False
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["in.txt"]
     assert src.read_text() == "one\ntwo\n"
+    assert "written_to" not in ok and "written_to" not in bad
 
 
-def test_file_input_output_path_may_not_be_the_source(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    with pytest.raises(ValueError):
-        run_vim_on_file(src, "%s/one/two/", mode="ex", output_path=src)
-    assert src.read_text() == "one\n"
-
-
-def test_output_refuses_an_existing_file_by_default(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    out = tmp_path / "out.txt"
-    out.write_text("PRECIOUS\n")
-    with pytest.raises(FileExistsError):
-        run_vim_on_file(src, "%s/one/two/", mode="ex", output_path=out)
-    assert out.read_text() == "PRECIOUS\n"   # untouched
-
-
-def test_output_overwrite_mode_replaces(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    out = tmp_path / "out.txt"
-    out.write_text("old\n")
-    r = run_vim_on_file(src, "%s/one/two/", mode="ex", output_path=out,
-                        on_exists="overwrite")
-    assert r["written_to"] == str(out)
-    assert out.read_text() == "two\n"
-
-
-def test_output_suffix_mode_never_overwrites_and_counts_up(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    out = tmp_path / "out.txt"
-
-    # free path: uses it as given
-    r1 = run_vim_on_file(src, "%s/one/A/", mode="ex", output_path=out,
-                         on_exists="suffix")
-    assert r1["written_to"] == str(out)
-
-    # taken: next free number, extension preserved
-    r2 = run_vim_on_file(src, "%s/one/B/", mode="ex", output_path=out,
-                         on_exists="suffix")
-    assert r2["written_to"] == str(tmp_path / "out_1.txt")
-
-    # taken again: counts up rather than clobbering out_1.txt
-    r3 = run_vim_on_file(src, "%s/one/C/", mode="ex", output_path=out,
-                         on_exists="suffix")
-    assert r3["written_to"] == str(tmp_path / "out_2.txt")
-
-    # every earlier result survives -- this is the property _temp lacked
-    assert out.read_text() == "A\n"
-    assert (tmp_path / "out_1.txt").read_text() == "B\n"
-    assert (tmp_path / "out_2.txt").read_text() == "C\n"
-
-
-def test_output_suffix_goes_before_the_extension(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    out = tmp_path / "report.txt"
-    out.write_text("existing\n")
-    r = run_vim_on_file(src, "%s/one/two/", mode="ex", output_path=out,
-                        on_exists="suffix")
-    # report_1.txt, NOT report.txt_1 -- globs and file-type detection survive
-    assert r["written_to"].endswith("report_1.txt")
-
-
-def test_unknown_on_exists_is_rejected(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    with pytest.raises(ValueError):
-        run_vim_on_file(src, "%s/one/two/", mode="ex",
-                        output_path=tmp_path / "out.txt", on_exists="clobber")
-
-
-def test_file_input_writes_nothing_when_command_fails(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    out = tmp_path / "out.txt"
-    r = run_vim_on_file(src, "%s/unclosed", mode="ex", output_path=out)
-    assert r["was_valid"] is False
-    assert r["written_to"] is None
-    assert not out.exists()
-
-
-# ------------------------------------------------------------------------ CLI
+# ------------------------------------------------------------------------ CLI (command-line interface)
 
 EXECUTOR = REPO / "src" / "executor.py"
 
@@ -362,17 +341,7 @@ def test_cli_reads_a_file_and_prints_result(tmp_path):
     assert src.read_text() == "the cat sat\n"  # source untouched
 
 
-def test_cli_output_flag_and_failure_exit_code(tmp_path):
-    src = tmp_path / "in.txt"
-    src.write_text("a\n")
-    out = tmp_path / "out.txt"
-    ok = subprocess.run(
-        [sys.executable, str(EXECUTOR), "--file", str(src),
-         "--command", "%s/a/b/", "--output", str(out)],
-        capture_output=True, text=True,
-    )
-    assert ok.returncode == 0 and out.read_text() == "b\n"
-
+def test_cli_invalid_command_exits_1(tmp_path):
     bad = subprocess.run(
         [sys.executable, str(EXECUTOR), "--text", "a\n",
          "--command", "%s/unclosed"],
@@ -381,38 +350,20 @@ def test_cli_output_flag_and_failure_exit_code(tmp_path):
     assert bad.returncode == 1
 
 
-def _cli(*extra, tmp_path):
+def test_cli_has_no_write_flags(tmp_path):
+    # The write path was removed 2026-09-04; the flags must not quietly
+    # come back as no-ops. argparse rejects them with its usage exit code.
     src = tmp_path / "in.txt"
-    if not src.exists():
-        src.write_text("one\n")
-    return subprocess.run(
-        [sys.executable, str(EXECUTOR), "--file", str(src),
-         "--command", "%s/one/two/", *extra],
-        capture_output=True, text=True,
-    )
-
-
-def test_cli_refuses_existing_output_by_default(tmp_path):
-    out = tmp_path / "out.txt"
-    out.write_text("PRECIOUS\n")
-    p = _cli("--output", str(out), tmp_path=tmp_path)
-    assert p.returncode == 2, "distinct exit code: command ok, output not written"
-    assert "already exists" in p.stderr
-    assert out.read_text() == "PRECIOUS\n"
-
-
-def test_cli_on_exists_suffix_and_overwrite(tmp_path):
-    out = tmp_path / "out.txt"
-    out.write_text("PRECIOUS\n")
-
-    suf = _cli("--output", str(out), "--on-exists", "suffix", tmp_path=tmp_path)
-    assert suf.returncode == 0
-    assert (tmp_path / "out_1.txt").read_text() == "two\n"
-    assert out.read_text() == "PRECIOUS\n"      # still not clobbered
-
-    ovr = _cli("--output", str(out), "--on-exists", "overwrite", tmp_path=tmp_path)
-    assert ovr.returncode == 0
-    assert out.read_text() == "two\n"
+    src.write_text("one\n")
+    for flags in (["--output", str(tmp_path / "out.txt")],
+                  ["--on-exists", "overwrite"]):
+        p = subprocess.run(
+            [sys.executable, str(EXECUTOR), "--file", str(src),
+             "--command", "%s/one/two/", *flags],
+            capture_output=True, text=True,
+        )
+        assert p.returncode == 2 and "unrecognized arguments" in p.stderr
+    assert sorted(q.name for q in tmp_path.iterdir()) == ["in.txt"]
 
 
 # ------------------------------------------------------------- key translation
@@ -421,3 +372,66 @@ def test_translate_named_keys():
     assert convert_keys("ci\"error<Esc>") == 'ci"error\x1b'
     assert convert_keys("<C-a>") == "\x01"
     assert convert_keys("a<lt>b") == "a<b"
+
+
+# --------------------------------------------------- diagnostics (2026-09-05)
+
+def test_invalid_ex_command_reports_vims_exception():
+    # The try/catch wrapper used to swallow the message; the §9 error analysis
+    # needs the E-code. The exception is written inside the sandbox dir (the
+    # one writable place) and read back -- no new write path anywhere else.
+    r = run_vim("foo\n", "s/nothere/x/", mode="ex")
+    assert r["was_valid"] is False
+    assert "E486" in r["stderr"] and "nothere" in r["stderr"]
+    r = run_vim("foo\n", "notacommand", mode="ex")
+    assert r["was_valid"] is False and "E492" in r["stderr"]
+
+
+def test_valid_ex_command_reports_no_exception():
+    r = run_vim("foo\n", "s/foo/bar/", mode="ex")
+    assert r["was_valid"] is True and "vim:" not in r["stderr"]
+
+
+# ----------------------------------------- NUL byte in an ex command (2026-09-22)
+
+@pytest.mark.parametrize("command", [
+    "2\x00a",                  # the base model's sample at T = 1 that crashed a run
+    "%s/cat/dog/g\x00",        # a right answer plus a stray NUL: must not become a match
+    "%s/c\x00at/dog/",         # inside the pattern
+    ":\x00%s/cat/dog/",        # after the colon; strip() does not remove a NUL
+])
+def test_ex_command_with_nul_is_invalid_not_a_crash(command):
+    # Ex commands reach vim in argv, which cannot carry a NUL: subprocess
+    # raised ValueError out of run_vim and aborted the caller's whole run.
+    r = run_vim(BUF, command, mode="ex")
+    assert r["was_valid"] is False and r["buffer_after"] is None
+    assert r["timeout"] is False and "NUL" in r["stderr"]
+    assert "blocked" not in r            # unrunnable, not dangerous
+
+
+def test_nul_does_not_mask_the_scope_screen():
+    # The screen answers first, so a dangerous command still reports blocked.
+    r = run_vim(BUF, "w! /tmp/vimBot_nul_exfil.txt\x00", mode="ex")
+    assert r["blocked"] is not None
+    assert not os.path.exists("/tmp/vimBot_nul_exfil.txt")
+
+
+def test_nul_in_keys_mode_is_still_a_key():
+    # Keys travel through a file, where NUL is insert-mode CTRL-@: insert the
+    # last inserted text and leave insert mode.
+    r = run_vim("foo bar\nfoo\n", "ibar<Esc>jo\x00", mode="keys")
+    assert _norm(r["buffer_after"]) == ["barfoo bar", "foo", "bar"]
+
+
+def test_other_control_bytes_still_reach_vim_in_ex_mode():
+    # Only NUL is special to argv; a literal Ctrl-A in a replacement runs.
+    r = run_vim("foo\n", "s/foo/\x01/", mode="ex")
+    assert r["was_valid"] is True and _norm(r["buffer_after"]) == ["\x01"]
+
+
+def test_file_input_inherits_the_nul_verdict(tmp_path):
+    p = tmp_path / "in.txt"
+    p.write_text("foo\n")
+    r = run_vim_on_file(p, "s/foo/\x00/")
+    assert r["was_valid"] is False and "NUL" in r["stderr"]
+    assert p.read_text() == "foo\n"

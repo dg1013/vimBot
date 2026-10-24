@@ -1,6 +1,6 @@
 """Tests for the settings layer: precedence, validation, and the shipped file.
 
-Precedence under test:  CLI flag > settings file > built-in default.
+Precedence under test:  CLI (command-line interface) flag > settings file > built-in default.
 """
 
 import subprocess
@@ -18,7 +18,6 @@ from settings import (  # noqa: E402
     Settings,
     load_settings,
 )
-from executor import ON_EXISTS_MODES  # noqa: E402
 
 EXECUTOR = REPO / "src" / "executor.py"
 
@@ -35,23 +34,48 @@ def test_settings_object_exposes_values_and_sources():
     s = Settings({k: dict(v) for k, v in DEFAULTS.items()},
                  {k: {kk: "default" for kk in v} for k, v in DEFAULTS.items()})
     assert s["executor"]["timeout"] == 5.0
-    assert s["executor"]["on_exists"] == "refuse"
+    assert s["executor"]["mode"] == "ex"
     assert s.source("executor", "timeout") == "default"
     assert s.path is None
 
 
-def test_shipped_settings_file_parses_and_changes_nothing(tmp_path):
-    # Every key in configs/settings.toml is commented out, so loading it must
-    # be identical to loading no file at all.
+# The shipped settings file overrides exactly these, and nothing else. The
+# convention is that every key is commented out, so an uncommented line always
+# means a deliberate decision -- this dict is where those decisions are
+# recorded. Adding an entry here should come with a DECISIONS.md line; a key
+# that turns up uncommented WITHOUT an entry is the accident this guards.
+SHIPPED_OVERRIDES = {
+    # 2026-08-27: the "namespace" default degrades to no OS (operating system) boundary with only
+    # a stderr warning, leaving src/scope.py (six known past gaps) as the sole
+    # protection. "required" makes that a hard failure instead.
+    ("executor", "isolation"): "required",
+}
+
+
+def test_shipped_settings_file_overrides_only_what_is_declared(tmp_path):
     assert DEFAULT_SETTINGS_PATH.exists(), "configs/settings.toml is missing"
     shipped = load_settings()
     bare = load_settings(write_settings(tmp_path, "# empty\n"))
-    assert shipped.as_dict() == bare.as_dict() == {
-        s: dict(v) for s, v in DEFAULTS.items()
-    }
+
+    expected = {s: dict(v) for s, v in DEFAULTS.items()}
+    for (section, key), value in SHIPPED_OVERRIDES.items():
+        expected[section][key] = value
+    assert shipped.as_dict() == expected
+
     for section in DEFAULTS:
         for key in DEFAULTS[section]:
-            assert shipped.source(section, key) == "default"
+            want = "file" if (section, key) in SHIPPED_OVERRIDES else "default"
+            assert shipped.source(section, key) == want, (
+                "configs/settings.toml has an undeclared override at "
+                "[%s] %s -- add it to SHIPPED_OVERRIDES with a reason, or "
+                "comment the line back out" % (section, key)
+            )
+
+    # everything not deliberately overridden still matches a bare load
+    for section in DEFAULTS:
+        for key in DEFAULTS[section]:
+            if (section, key) not in SHIPPED_OVERRIDES:
+                assert shipped[section][key] == bare[section][key]
 
 
 def test_missing_explicit_path_is_an_error(tmp_path):
@@ -104,7 +128,6 @@ samples = 3
     ('[executor]\nvim_bin = 7\n', "expected a string"),
     ('[generate]\nmax_buffer_lines = 1.5\n', "expected an integer"),
     ('[executor]\nmode = "visual"\n', "expected one of"),
-    ('[executor]\non_exists = "clobber"\n', "expected one of"),
     ('[executor]\ntimeout = -1\n', "must be positive"),
     ('[splits]\nval_frac = 2.0\n', "between 0 and 1"),
 ])
@@ -124,36 +147,36 @@ def test_allowed_values_match_the_real_definitions():
     # settings.py deliberately does not import from executor.py (no cycle),
     # so this guards against the two drifting apart.
     from settings import _ALLOWED
-    assert _ALLOWED[("executor", "on_exists")] == ON_EXISTS_MODES
+    assert _ALLOWED[("executor", "mode")] == ("ex", "keys")
+    for section, key in _ALLOWED:
+        assert key in DEFAULTS[section], (section, key)
 
 
 # ------------------------------------------------------------ CLI precedence
 
 def test_cli_flag_beats_the_settings_file(tmp_path):
     src = tmp_path / "in.txt"
-    src.write_text("one\n")
-    out = tmp_path / "out.txt"
-    out.write_text("PRECIOUS\n")
-    p = write_settings(tmp_path, '[executor]\non_exists = "overwrite"\n')
+    src.write_text("one\ntwo\n")
+    p = write_settings(tmp_path, '[executor]\nmode = "keys"\n')
 
-    # file says overwrite; CLI says refuse -> CLI wins, file survives
-    refused = subprocess.run(
+    # file says keys; CLI says ex -> CLI wins: `:2d` deletes line 2
+    cli_wins = subprocess.run(
         [sys.executable, str(EXECUTOR), "--settings", str(p),
-         "--file", str(src), "--command", "%s/one/two/",
-         "--output", str(out), "--on-exists", "refuse"],
+         "--file", str(src), "--command", "2d", "--mode", "ex"],
         capture_output=True, text=True,
     )
-    assert refused.returncode == 2
-    assert out.read_text() == "PRECIOUS\n"
+    assert cli_wins.returncode == 0
+    assert cli_wins.stdout == "one\n"
 
-    # no CLI flag -> the file's "overwrite" applies
-    applied = subprocess.run(
+    # no CLI flag -> the file's "keys" applies: `2d` is an unfinished
+    # operator, the Esc-recovery suffix abandons it, nothing changes
+    file_applies = subprocess.run(
         [sys.executable, str(EXECUTOR), "--settings", str(p),
-         "--file", str(src), "--command", "%s/one/two/", "--output", str(out)],
+         "--file", str(src), "--command", "2d"],
         capture_output=True, text=True,
     )
-    assert applied.returncode == 0
-    assert out.read_text() == "two\n"
+    assert file_applies.stdout == "one\ntwo\n"
+    assert src.read_text() == "one\ntwo\n"
 
 
 def test_cli_show_settings_reports_sources(tmp_path):
