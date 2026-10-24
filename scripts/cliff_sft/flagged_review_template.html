@@ -1,0 +1,460 @@
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --ground: #F6F5F1; --panel: #FFFFFF; --ink: #1E2126; --muted: #6A6F78; --line: #DCDAD3;
+  --accent: #2E6B5F; --accent-ink: #FFFFFF; --focus: #2E6B5F;
+  --before: #F3F2ED; --gold: #EEF5F1; --policy: #F2F0F8; --mark: #FFF1BF; --mark-ink: #4A3800;
+  --keep: #2E6B5F; --retarget: #2F5FA8; --reword: #B7791F; --drop: #B23A3A; --unsure: #6A6F78;
+  --chip-ink: #FFFFFF; --agree: #E4EFEA; --disagree: #FBE9E7;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #16181D; --panel: #1E2127; --ink: #E8E6E1; --muted: #9AA0A8; --line: #33373F;
+    --accent: #5FB59F; --accent-ink: #10201B; --focus: #5FB59F;
+    --before: #23262C; --gold: #1F2B27; --policy: #26232F; --mark: #4A3F14; --mark-ink: #FFE9A6;
+    --keep: #3F8C7C; --retarget: #4F7FC9; --reword: #C99133; --drop: #C9534F; --unsure: #7C838C;
+    --chip-ink: #0E1012; --agree: #22342E; --disagree: #3A2626;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #16181D; --panel: #1E2127; --ink: #E8E6E1; --muted: #9AA0A8; --line: #33373F;
+  --accent: #5FB59F; --accent-ink: #10201B; --focus: #5FB59F;
+  --before: #23262C; --gold: #1F2B27; --policy: #26232F; --mark: #4A3F14; --mark-ink: #FFE9A6;
+  --keep: #3F8C7C; --retarget: #4F7FC9; --reword: #C99133; --drop: #C9534F; --unsure: #7C838C;
+  --chip-ink: #0E1012; --agree: #22342E; --disagree: #3A2626;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 14px/1.45 "IBM Plex Sans", "Segoe UI", Roboto, system-ui, sans-serif; padding-block: 0 48px; padding-inline: 16px; }
+code, pre, .mono, textarea, input.cmd { font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace; }
+a { color: var(--accent); }
+h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.wrap { max-width: 1180px; margin: 0 auto; }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--ground); border-bottom: 1px solid var(--line); padding-block: 10px 8px; margin-inline: -16px; padding-inline: 16px; }
+.toprow { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.sub { color: var(--muted); font-size: 12.5px; }
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+.progress > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 8px; font-size: 12.5px; }
+.filters label { color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+select, input[type=text], textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+select:focus, input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.counts { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.counts span { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); }
+.counts span b { color: var(--ink); font-weight: 600; }
+details.intro { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 8px 12px; font-size: 13px; }
+details.intro summary { cursor: pointer; font-weight: 500; }
+details.intro p { margin: 6px 0; max-width: 72ch; }
+.list { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; scroll-margin-top: 150px; }
+.card.focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.card.hidden { display: none; }
+.head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 12px; color: var(--muted); }
+.head .id { font-weight: 600; color: var(--ink); }
+.head .num { font-variant-numeric: tabular-nums; }
+.chip { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 600; color: var(--chip-ink); letter-spacing: .02em; text-transform: uppercase; }
+.chip.keep { background: var(--keep); } .chip.retarget { background: var(--retarget); } .chip.reword { background: var(--reword); } .chip.drop { background: var(--drop); } .chip.unsure { background: var(--unsure); }
+.instr { font-size: 16px; font-weight: 500; margin: 8px 0 2px; text-wrap: pretty; }
+.cursor { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.bufs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 860px) { .bufs { grid-template-columns: 1fr; } }
+.buf { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.buf .lab { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 5px 8px 3px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.buf .lab .n { font-variant-numeric: tabular-nums; color: var(--ink); text-transform: none; letter-spacing: 0; }
+.buf .cmd { padding: 0 8px 5px; font-size: 12.5px; word-break: break-all; }
+.buf .cmd code { background: transparent; }
+.buf pre { margin: 0; padding: 6px 8px 8px; font-size: 12.5px; line-height: 1.4; overflow-x: auto; tab-size: 8; white-space: pre; min-height: 3em; }
+.buf.before { background: var(--before); } .buf.gold { background: var(--gold); } .buf.policy { background: var(--policy); }
+.ln { display: block; }
+.ln.mark { background: var(--mark); color: var(--mark-ink); }
+.ln .no { display: inline-block; width: 2.2em; color: var(--muted); user-select: none; text-align: right; margin-right: .6em; }
+.cur { background: var(--accent); color: var(--accent-ink); border-radius: 2px; }
+.ws { color: var(--muted); opacity: .75; }
+.invalid { color: var(--drop); }
+.foot { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 10px 14px; margin-top: 10px; }
+@media (max-width: 860px) { .foot { grid-template-columns: 1fr; } }
+.claude { font-size: 13px; }
+.claude .lab, .owner .lab { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 4px; }
+.claude .reason { margin: 2px 0 4px; max-width: 70ch; }
+.claude .prop { font-size: 12.5px; color: var(--muted); }
+.claude .prop code { color: var(--ink); }
+.owner .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+button.v { font: inherit; font-size: 12.5px; font-weight: 500; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button.v[aria-pressed="true"].keep { background: var(--keep); color: var(--chip-ink); border-color: transparent; }
+button.v[aria-pressed="true"].retarget { background: var(--retarget); color: var(--chip-ink); border-color: transparent; }
+button.v[aria-pressed="true"].reword { background: var(--reword); color: var(--chip-ink); border-color: transparent; }
+button.v[aria-pressed="true"].drop { background: var(--drop); color: var(--chip-ink); border-color: transparent; }
+button.v[aria-pressed="true"].unsure { background: var(--unsure); color: var(--chip-ink); border-color: transparent; }
+button.small { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--accent); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+.fields { display: grid; gap: 6px; margin-top: 6px; }
+.fields label { font-size: 12px; color: var(--muted); display: grid; gap: 2px; }
+.fields input, .fields textarea { width: 100%; }
+.fields textarea { min-height: 2.6em; resize: vertical; }
+.state { font-size: 12px; margin-top: 6px; color: var(--muted); }
+.state.agree { color: var(--keep); } .state.disagree { color: var(--drop); }
+.export { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; }
+.export textarea { width: 100%; min-height: 140px; font-size: 12px; }
+.export .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.sr { position: absolute; left: -9999px; }
+.kbd { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+@media (prefers-reduced-motion: reduce) { .progress > i { transition: none; } }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="toprow">
+    <div>
+      <h1 id="title">__TITLE__</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="counts" id="counts"></div>
+  </div>
+  <div class="progress" aria-hidden="true"><i id="bar"></i></div>
+  <div class="filters">
+    <label>category <select id="f-cat"><option value="">all</option></select></label>
+    <label>source <select id="f-src"><option value="">all</option></select></label>
+    <label>Claude says <select id="f-claude"><option value="">all</option><option>keep</option><option>retarget</option><option>reword</option><option>drop</option></select></label>
+    <label>your verdict <select id="f-mine"><option value="">all</option><option value="none">not yet</option><option value="any">reviewed</option><option value="disagree">differs from Claude</option><option>keep</option><option>retarget</option><option>reword</option><option>drop</option><option>unsure</option></select></label>
+    <label><input type="checkbox" id="f-focus-next"> jump to the next unreviewed after a verdict</label>
+    <span class="sub" id="store"></span>
+  </div>
+</header>
+
+<details class="intro" id="intro" open>
+  <summary>What this page is</summary>
+  <p>These are the train prompts the 4B policy answers with <b>one stable, executor-accepted command</b> in six or more of eight samples, and the gold disagrees. Each card shows the instruction, the buffer before, what the <b>gold</b> command does to it, and what the <b>policy's</b> answer does to it. Lines the command changed are marked; the cursor is shown as a highlighted cell; a trailing space is shown as <code class="ws">·</code> and a tab as <code class="ws">⇥</code>.</p>
+  <p>Claude read every row and left a verdict with its reason. Yours is the one that counts. <b>keep</b>: the gold is right, teach it. <b>retarget</b>: the policy's reading is right, or the command below is; it becomes the gold and the expected buffer is recomputed. <b>reword</b>: the instruction is wrong or ambiguous; the text below becomes the instruction. <b>drop</b>: the row should not exist. <b>unsure</b>: come back later. Fields are prefilled with Claude's proposal and can be edited.</p>
+  <p>Keys: <span class="kbd">j</span> / <span class="kbd">k</span> move, <span class="kbd">1</span>–<span class="kbd">5</span> set keep / retarget / reword / drop / unsure on the focused card, <span class="kbd">a</span> agrees with Claude. Verdicts save as you go; the export at the bottom is the change-set for <code>apply_curation.py</code>. Nothing is applied by this page.</p>
+</details>
+
+<div class="list" id="list"></div>
+
+<section class="export">
+  <div class="row">
+    <b>Change-set</b> <span class="sub">from your verdicts (retarget → edits.command, reword → edits.instruction, drop → deletes)</span>
+    <button class="small" id="copy">Copy</button>
+    <span class="sub" id="copied"></span>
+  </div>
+  <textarea id="changeset" readonly spellcheck="false" aria-label="change-set JSON"></textarea>
+</section>
+</div>
+
+<div id="err" class="card" hidden role="alert" style="border-color:var(--drop)"></div>
+<script>
+window.addEventListener("error", function (e) {
+  var el = document.getElementById("err"); if (!el) return;
+  el.hidden = false;
+  el.textContent = "The page script failed, so the cards did not render: " + (e.message || e.error || "unknown error") +
+    (e.lineno ? " (line " + e.lineno + ")" : "") + ". Reload once; if it persists, send this text to Claude.";
+});
+</script>
+<script>
+(function () {
+"use strict";
+const DATA = /*__DATA__*/null;
+const VERDICTS = ["keep", "retarget", "reword", "drop", "unsure"];
+const LS_KEY = "vimbot-cliff-disagreements";
+const rows = DATA.rows, claudeV = DATA.claude || {}, meta = DATA.meta || {};
+const mine = {};          // id -> {verdict, note, command, mode, instruction, at}
+let store = null, unsub = null, focusIdx = -1, saving = {};
+
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function lines(buf) {
+  const ls = String(buf).split("\n");
+  if (ls.length && ls[ls.length - 1] === "") ls.pop();
+  return ls;
+}
+
+function renderLine(text, cursorCol) {
+  let out = "";
+  const trailing = text.length - text.replace(/[ \t]+$/, "").length;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    let piece;
+    if (ch === "\t") piece = '<span class="ws">⇥</span>';
+    else if (ch === " " && i >= text.length - trailing) piece = '<span class="ws">·</span>';
+    else piece = esc(ch);
+    if (cursorCol !== undefined && i === cursorCol - 1) piece = '<span class="cur">' + (ch === "\t" ? "⇥" : ch === " " ? "·" : esc(ch)) + '</span>';
+    out += piece;
+  }
+  if (cursorCol !== undefined && cursorCol - 1 >= text.length) out += '<span class="cur"> </span>';
+  return out;
+}
+
+function renderBuf(buf, opts) {
+  const ls = lines(buf);
+  const ref = opts.ref ? lines(opts.ref) : null;
+  const refCount = {};
+  if (ref) ref.forEach(l => { refCount[l] = (refCount[l] || 0) + 1; });
+  let html = "";
+  if (!ls.length) html = '<span class="ln"><span class="no"></span><span class="ws">(empty)</span></span>';
+  ls.forEach((l, i) => {
+    let mark = false;
+    if (ref) { if (refCount[l]) refCount[l]--; else mark = true; }
+    const cur = (opts.cursor && opts.cursor[0] === i + 1) ? opts.cursor[1] : undefined;
+    html += '<span class="ln' + (mark ? " mark" : "") + '"><span class="no">' + (i + 1) + '</span>' + renderLine(l, cur) + '</span>';
+  });
+  return html;
+}
+
+function propText(c, r) {
+  if (!c) return "";
+  if (c.verdict === "retarget") return 'proposed gold: <code>' + esc(c.mode || r.policy.mode) + ": " + esc(c.command || r.policy.command) + '</code>';
+  if (c.verdict === "reword") return 'proposed instruction: <code>' + esc(c.instruction || "") + '</code>';
+  return "";
+}
+
+function cardHtml(r, idx) {
+  const c = claudeV[r.id];
+  const pol = r.policy, pex = r.policy_exec;
+  const polSame = pex && pex.buffer === r.gold_exec.buffer;
+  return '<article class="card" id="card-' + esc(r.id) + '" data-idx="' + idx + '" tabindex="-1">' +
+    '<div class="head"><span class="num">#' + (idx + 1) + '</span><span class="id">' + esc(r.id) + '</span>' +
+    '<span>' + esc(r.category) + ' · ' + esc(r.tier) + ' · ' + esc(r.mode) + ' · ' + esc(r.source) + '</span>' +
+    (c ? '<span class="chip ' + esc(c.verdict) + '" title="Claude\'s verdict">Claude: ' + esc(c.verdict) + '</span>' : "") +
+    '<span class="mine-chip" id="mine-' + esc(r.id) + '"></span></div>' +
+    '<div class="instr">' + esc(r.instruction) + '</div>' +
+    '<div class="cursor">cursor line ' + r.cursor[0] + ', column ' + r.cursor[1] + '</div>' +
+    '<div class="bufs">' +
+      '<div class="buf before"><div class="lab">before</div><div class="cmd">&nbsp;</div><pre>' + renderBuf(r.buffer_before, {cursor: r.cursor}) + '</pre></div>' +
+      '<div class="buf gold"><div class="lab">gold <span class="n">' + esc(r.mode) + '</span></div><div class="cmd"><code>' + esc(r.gold_command) + '</code></div><pre>' + renderBuf(r.gold_exec.buffer, {ref: r.buffer_before}) + '</pre></div>' +
+      '<div class="buf policy"><div class="lab">policy <span class="n">' + (pol ? esc(pol.mode) + " · " + pol.n + " of " + pol.G : "") + '</span>' + (polSame ? ' <span class="n">(same buffer as gold)</span>' : "") + '</div>' +
+        '<div class="cmd"><code>' + (pol ? esc(pol.command) : "—") + '</code></div><pre>' +
+        (pex ? (pex.valid ? renderBuf(pex.buffer, {ref: r.buffer_before}) : '<span class="invalid">invalid: ' + esc(pex.error) + '</span>') : "") + '</pre></div>' +
+    '</div>' +
+    '<div class="foot">' +
+      '<div class="claude"><div class="lab">Claude\'s reading</div>' +
+        (c ? '<div class="reason">' + esc(c.reason) + '</div><div class="prop">' + propText(c, r) + '</div>' : '<div class="reason sub">no verdict recorded</div>') +
+      '</div>' +
+      '<div class="owner"><div class="lab">Your verdict</div>' +
+        '<div class="btns">' + VERDICTS.map((v, i) => '<button class="v ' + v + '" data-v="' + v + '" aria-pressed="false" title="' + (i + 1) + '">' + v + '</button>').join("") +
+        (c ? '<button class="small agree" title="a">same as Claude</button>' : "") + '</div>' +
+        '<div class="fields">' +
+          '<label class="f-cmd" hidden>new gold command (mode: command)<input type="text" class="cmd" data-f="command" spellcheck="false"></label>' +
+          '<label class="f-instr" hidden>new instruction<textarea data-f="instruction"></textarea></label>' +
+          '<label>note<input type="text" data-f="note" placeholder="optional"></label>' +
+        '</div>' +
+        '<div class="state" id="state-' + esc(r.id) + '"></div>' +
+      '</div>' +
+    '</div>' +
+  '</article>';
+}
+
+function build() {
+  const list = document.getElementById("list");
+  list.innerHTML = rows.map(cardHtml).join("");
+  const cats = new Set(), srcs = new Set();
+  rows.forEach(r => { cats.add(r.category); srcs.add(r.source); });
+  const fc = document.getElementById("f-cat"), fs = document.getElementById("f-src");
+  [...cats].sort().forEach(c => { const o = document.createElement("option"); o.textContent = c; fc.appendChild(o); });
+  [...srcs].sort().forEach(s => { const o = document.createElement("option"); o.textContent = s; fs.appendChild(o); });
+  document.getElementById("subtitle").textContent = rows.length + " rows the policy answers consistently and the gold disagrees · Claude reviewed " + (meta.claude_n || 0);
+  list.addEventListener("click", onClick);
+  list.addEventListener("input", onInput);
+  list.addEventListener("focusin", e => { const card = e.target.closest(".card"); if (card) setFocus(+card.dataset.idx, false); });
+  ["f-cat", "f-src", "f-claude", "f-mine"].forEach(id => document.getElementById(id).addEventListener("change", applyFilters));
+  document.getElementById("copy").addEventListener("click", copyChangeset);
+  document.addEventListener("keydown", onKey);
+  try { if (localStorage.getItem(LS_KEY + "-intro") === "closed") document.getElementById("intro").open = false; } catch (e) {}
+  document.getElementById("intro").addEventListener("toggle", ev => { try { localStorage.setItem(LS_KEY + "-intro", ev.target.open ? "open" : "closed"); } catch (e) {} });
+  rows.forEach(r => paint(r.id));
+  applyFilters();
+  refreshCounts();
+}
+
+function proposalFor(id, verdict) {
+  const c = claudeV[id] || {}, r = rows.find(x => x.id === id);
+  if (verdict === "retarget") return {command: (c.verdict === "retarget" && c.command) ? c.command : (r.policy ? r.policy.command : ""), mode: (c.verdict === "retarget" && c.mode) ? c.mode : (r.policy ? r.policy.mode : r.mode)};
+  if (verdict === "reword") return {instruction: (c.verdict === "reword" && c.instruction) ? c.instruction : r.instruction};
+  return {};
+}
+
+function setVerdict(id, verdict, extra) {
+  const cur = mine[id] || {};
+  const prop = proposalFor(id, verdict);
+  const rec = Object.assign({}, cur, prop, extra || {}, {verdict: verdict, at: new Date().toISOString()});
+  if (verdict !== "retarget") { delete rec.command; delete rec.mode; }
+  if (verdict !== "reword") delete rec.instruction;
+  mine[id] = rec;
+  paint(id);
+  persist(id);
+  refreshCounts();
+  if (document.getElementById("f-focus-next").checked) nextUnreviewed();
+}
+
+function paint(id) {
+  const rec = mine[id], card = document.getElementById("card-" + id);
+  if (!card) return;
+  card.querySelectorAll("button.v").forEach(b => b.setAttribute("aria-pressed", rec && rec.verdict === b.dataset.v ? "true" : "false"));
+  const fCmd = card.querySelector(".f-cmd"), fIns = card.querySelector(".f-instr");
+  fCmd.hidden = !(rec && rec.verdict === "retarget");
+  fIns.hidden = !(rec && rec.verdict === "reword");
+  const cmdIn = fCmd.querySelector("input"), insIn = fIns.querySelector("textarea"), noteIn = card.querySelector('input[data-f="note"]');
+  if (rec && rec.verdict === "retarget" && document.activeElement !== cmdIn) cmdIn.value = (rec.mode || "") + ": " + (rec.command || "");
+  if (rec && rec.verdict === "reword" && document.activeElement !== insIn) insIn.value = rec.instruction || "";
+  if (document.activeElement !== noteIn) noteIn.value = (rec && rec.note) || "";
+  const chip = document.getElementById("mine-" + id);
+  chip.innerHTML = rec ? '<span class="chip ' + esc(rec.verdict) + '" title="your verdict">you: ' + esc(rec.verdict) + '</span>' : "";
+  const st = document.getElementById("state-" + id), c = claudeV[id];
+  st.className = "state";
+  if (!rec) st.textContent = "not reviewed";
+  else if (c && c.verdict === rec.verdict) { st.textContent = "agrees with Claude"; st.className += " agree"; }
+  else if (c) { st.textContent = "differs from Claude (" + c.verdict + ")"; st.className += " disagree"; }
+  else st.textContent = "recorded";
+  card.dataset.mine = rec ? rec.verdict : "";
+}
+
+function onClick(e) {
+  const card = e.target.closest(".card"); if (!card) return;
+  const id = rows[+card.dataset.idx].id;
+  setFocus(+card.dataset.idx, false);
+  const vb = e.target.closest("button.v");
+  if (vb) { setVerdict(id, vb.dataset.v); return; }
+  if (e.target.closest("button.agree")) { agree(id); }
+}
+
+function agree(id) {
+  const c = claudeV[id]; if (!c) return;
+  setVerdict(id, c.verdict, c.verdict === "retarget" ? {command: c.command, mode: c.mode} : c.verdict === "reword" ? {instruction: c.instruction} : {});
+}
+
+let inputTimers = {};
+function onInput(e) {
+  const card = e.target.closest(".card"); if (!card) return;
+  const id = rows[+card.dataset.idx].id, f = e.target.dataset.f; if (!f) return;
+  const rec = mine[id] || (mine[id] = {verdict: "unsure", at: new Date().toISOString()});
+  if (f === "command") {
+    const m = /^\s*(ex|keys)\s*:\s*(.*)$/.exec(e.target.value);
+    if (m) { rec.mode = m[1]; rec.command = m[2]; } else { rec.command = e.target.value; }
+  } else rec[f] = e.target.value;
+  rec.at = new Date().toISOString();
+  clearTimeout(inputTimers[id]);
+  inputTimers[id] = setTimeout(() => { paint(id); persist(id); }, 500);
+}
+
+function setFocus(idx, scroll) {
+  document.querySelectorAll(".card.focus").forEach(c => c.classList.remove("focus"));
+  focusIdx = idx;
+  const card = document.querySelector('.card[data-idx="' + idx + '"]');
+  if (card) { card.classList.add("focus"); if (scroll) card.scrollIntoView({block: "start", behavior: "smooth"}); }
+}
+
+function visibleIdx() { return [...document.querySelectorAll(".card:not(.hidden)")].map(c => +c.dataset.idx); }
+
+function move(delta) {
+  const vis = visibleIdx(); if (!vis.length) return;
+  let pos = vis.indexOf(focusIdx); pos = pos < 0 ? 0 : Math.max(0, Math.min(vis.length - 1, pos + delta));
+  setFocus(vis[pos], true);
+}
+
+function nextUnreviewed() {
+  const vis = visibleIdx(); const pos = vis.indexOf(focusIdx);
+  for (let i = pos + 1; i < vis.length; i++) if (!mine[rows[vis[i]].id]) { setFocus(vis[i], true); return; }
+}
+
+function onKey(e) {
+  const t = e.target; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+  if (e.key === "j") { move(1); e.preventDefault(); }
+  else if (e.key === "k") { move(-1); e.preventDefault(); }
+  else if (/^[1-5]$/.test(e.key) && focusIdx >= 0) { setVerdict(rows[focusIdx].id, VERDICTS[+e.key - 1]); e.preventDefault(); }
+  else if (e.key === "a" && focusIdx >= 0) { agree(rows[focusIdx].id); e.preventDefault(); }
+}
+
+function applyFilters() {
+  const cat = document.getElementById("f-cat").value, src = document.getElementById("f-src").value;
+  const fc = document.getElementById("f-claude").value, fm = document.getElementById("f-mine").value;
+  let shown = 0;
+  rows.forEach((r, i) => {
+    const c = claudeV[r.id], m = mine[r.id];
+    let ok = (!cat || r.category === cat) && (!src || r.source === src) && (!fc || (c && c.verdict === fc));
+    if (fm === "none") ok = ok && !m;
+    else if (fm === "any") ok = ok && !!m;
+    else if (fm === "disagree") ok = ok && !!m && !!c && m.verdict !== c.verdict;
+    else if (fm) ok = ok && !!m && m.verdict === fm;
+    const card = document.querySelector('.card[data-idx="' + i + '"]');
+    card.classList.toggle("hidden", !ok);
+    if (ok) shown++;
+  });
+  document.getElementById("counts").dataset.shown = shown;
+  refreshCounts();
+}
+
+function refreshCounts() {
+  const n = rows.length, done = rows.filter(r => mine[r.id]).length;
+  const by = {}; VERDICTS.forEach(v => by[v] = 0);
+  rows.forEach(r => { if (mine[r.id]) by[mine[r.id].verdict]++; });
+  const dis = rows.filter(r => mine[r.id] && claudeV[r.id] && mine[r.id].verdict !== claudeV[r.id].verdict).length;
+  const shown = document.getElementById("counts").dataset.shown;
+  document.getElementById("counts").innerHTML =
+    '<span><b>' + done + '</b> / ' + n + ' reviewed</span>' + VERDICTS.map(v => '<span>' + v + ' <b>' + by[v] + '</b></span>').join("") +
+    '<span>differs from Claude <b>' + dis + '</b></span>' + (shown !== undefined ? '<span>showing <b>' + shown + '</b></span>' : "");
+  document.getElementById("bar").style.width = (100 * done / n) + "%";
+  renderChangeset();
+}
+
+function changeset() {
+  const edits = {}, deletes = {}, unsure = [];
+  rows.forEach(r => {
+    const m = mine[r.id]; if (!m) return;
+    if (m.verdict === "retarget" && m.command) edits[r.id] = {command: m.command, mode: m.mode || r.mode};
+    else if (m.verdict === "reword" && m.instruction && m.instruction !== r.instruction) edits[r.id] = {instruction: m.instruction};
+    else if (m.verdict === "drop") deletes[r.id] = "dropped in the cliff disagreement review" + (m.note ? ": " + m.note : "");
+    else if (m.verdict === "unsure") unsure.push(r.id);
+  });
+  return {edits: edits, deletes: deletes, unsure: unsure, reviewed: rows.filter(r => mine[r.id]).length, of: rows.length};
+}
+
+function renderChangeset() { document.getElementById("changeset").value = JSON.stringify(changeset(), null, 1); }
+
+async function copyChangeset() {
+  const ta = document.getElementById("changeset"); ta.select();
+  try { await navigator.clipboard.writeText(ta.value); document.getElementById("copied").textContent = "copied"; }
+  catch (e) { document.execCommand && document.execCommand("copy"); document.getElementById("copied").textContent = "selected — press Ctrl/Cmd+C"; }
+  setTimeout(() => { document.getElementById("copied").textContent = ""; }, 2000);
+}
+
+// ---------------------------------------------------------------- storage
+
+function loadLocal() {
+  try { const v = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); Object.keys(v).forEach(k => { mine[k] = v[k]; }); } catch (e) {}
+}
+function saveLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(mine)); } catch (e) {} }
+
+async function persist(id) {
+  saveLocal();
+  if (!store) return;
+  const rec = mine[id]; if (!rec) return;
+  if (saving[id]) { saving[id] = "again"; return; }
+  saving[id] = true;
+  try {
+    await store.doc("verdicts/" + id).set(Object.assign({}, rec, {id: id}));
+    setStore("saved " + new Date().toLocaleTimeString());
+  } catch (e) { setStore("not saved: " + (e && e.code ? e.code : "error") + " — kept in this browser"); }
+  const again = saving[id] === "again"; delete saving[id];
+  if (again) persist(id);
+}
+
+function setStore(t) { document.getElementById("store").textContent = t; }
+
+async function connect() {
+  try { store = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch (e) { store = null; }
+  if (!store) { setStore("verdicts kept in this browser only (no shared store here)"); return; }
+  setStore("verdicts saved to the shared store");
+  unsub = store.collection("verdicts").onSnapshot(snap => {
+    let changed = false;
+    snap.docs.forEach(d => {
+      if (!d.exists) return;
+      const v = d.data(); const id = v.id || d.id;
+      const cur = mine[id];
+      if (!cur || (v.at && (!cur.at || v.at >= cur.at))) { mine[id] = v; changed = true; paint(id); }
+    });
+    if (changed) { saveLocal(); refreshCounts(); }
+  }, e => setStore("live updates stopped (" + (e && e.code ? e.code : "error") + "); saves still work"));
+}
+
+loadLocal();
+build();
+connect();
+})();
+</script>
