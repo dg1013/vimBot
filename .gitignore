@@ -4,3 +4,24 @@ __pycache__/
 
 # W&B local run cache (runs are logged to the cloud; §8)
 wandb/
+
+# The dataset stays off GitHub: every corpus, split, fix manifest and review
+# verdict, the vendored third-party corpora, and the all-data workbook.
+data/
+exports/*.xlsx
+exports/cache/
+/authored.json
+/quota_audit.json
+/test.json
+/test.fixed.json
+
+# Run outputs: predictions, transcripts, logs, rollouts, adapters (~40 GB).
+runs/
+
+# Plans and notes kept for Claude sessions (CLAUDE.md, HANDOFF.md,
+# DECISIONS.md, RESULTS.md, the folder READMEs) and personal working files.
+# The root README.md is the only markdown that goes public.
+*.md
+!/README.md
+.claude/
+myScripts/
