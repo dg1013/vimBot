@@ -1,7 +1,7 @@
 """Validate/ingest pipeline for vimBot synthetic data (CLAUDE.md §7.2).
 
 Generation is split in two (DECISIONS.md 2026-08-11): candidate tuples are
-authored by a frontier teacher (Claude, in-session) into JSONL files under
+authored by a frontier teacher (Claude, in-session) into JSONL (JSON Lines) files under
 data/candidates/; this script is the deterministic half — it validates every
 candidate through the sandboxed executor and keeps only tuples whose command
 actually reproduces the claimed buffer AND changes the buffer.
@@ -127,7 +127,9 @@ _EX_FORBIDDEN = {
     "py", "python", "py3", "python3", "lua", "perl", "ruby",
 }
 
-_EX_RANGE = r"[\s%$.,;+\-0-9']*"
+# Addresses: line specs PLUS /pattern/ and ?pattern? search addresses
+# (e.g. `.,/^=======/d` inside a :g — standard ex grammar).
+_EX_RANGE = r"(?:[\s%$.,;+\-0-9']|/(?:[^/\\]|\\.)*/|\?(?:[^?\\]|\\.)*\?)*"
 _EX_HEAD = re.compile(rf"^{_EX_RANGE}([a-zA-Z]+|[<>]+|[&~=#*@!])(!?)\s*(.*)$",
                       re.DOTALL)
 
@@ -189,14 +191,16 @@ def screen_ex(command: str) -> str | None:
 
 # -------------------------------------------------------- scope screens (keys)
 
+# 2026-08-18: visual mode, visual block, named registers and macro RECORDING
+# were removed from this list. They are covered scope now -- see
+# data/command_coverage.md, which replaced the frozen-scope-v1 exclusion list.
+# What remains is what is still out of scope, for reasons that are not
+# taxonomy: macro playback executes register contents that may have come from
+# the buffer rather than from the command, and ZZ/ZQ/Q/gQ save or open ex mode.
 _KEYS_SCREENS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"^[0-9]*q"), "macro recording (q...)"),
-    (re.compile(r"^[0-9]*\""), "named register (\"x...)"),
     (re.compile(r"@"), "macro playback (@)"),
     (re.compile(r"ZZ|ZQ"), "save/quit (ZZ/ZQ)"),
-    (re.compile(r"^[0-9]*[vV]"), "visual mode at start"),
     (re.compile(r"^Q|^gQ"), "ex mode (Q/gQ)"),
-    (re.compile(r"<c-v>", re.IGNORECASE), "visual block (<C-v>)"),
 ]
 
 
@@ -446,6 +450,11 @@ def process_candidate(
             "teacher": TEACHER,
             "source_candidate": cid,
         }
+        # provenance passthrough for imported corpora (additive §5 fields)
+        for key in ("source", "source_corpus", "source_index",
+                    "source_regex", "source_license", "source_theme"):
+            if key in cand:
+                row[key] = cand[key]
         append_jsonl(out_path, row)
         corpus.register_case(row)
         kept += 1
