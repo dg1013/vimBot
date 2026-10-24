@@ -1,0 +1,72 @@
+# Training/serving dependencies (CLAUDE.md §13).
+#
+# Installed into the `vimBot` conda env (python 3.12.13) on 2026-08-26 and
+# pinned here to the exact resolved versions, per §13's "pinned when first
+# used". Install with:
+#
+#     conda run -n vimBot pip install -r requirements-train.txt
+#
+# Hardware this was resolved against: single RTX 3090 (Ampere sm86, 24 GB (gigabytes)),
+# driver 610.88. Verified after install: torch.cuda.is_available() True,
+# device capability (8, 6), torch.cuda.is_bf16_supported() True — which is
+# the §3 requirement (bf16 (bfloat16, the 16-bit brain floating-point format) yes, FlashAttention-2 yes, FP8 (8-bit floating point) no).
+#
+# STACK CHOICE: §8 offers "Unsloth (primary) or TRL (Transformer Reinforcement Learning)". This is the **TRL**
+# path, and the choice was forced rather than preferred — see DECISIONS.md
+# 2026-08-27. `pip install unsloth` resolves to torch 2.11.0 / transformers
+# 5.5.0 / trl 0.24.0 / datasets 4.3.0, i.e. it downgrades four packages off
+# the current stack. Switching to Unsloth later means a coordinated downgrade
+# of all four, not an additive install; do it in a separate env if both are
+# wanted.
+
+# --- core training -----------------------------------------------------
+torch==2.13.0                 # +cu130 wheel; CUDA (Compute Unified Device Architecture) 13.0 runtime bundled
+transformers==5.16.1
+datasets==5.0.1
+accelerate==1.14.0
+peft==0.20.0                  # LoRA (low-rank adaptation) r=16 α=32, all-linear (§8)
+trl==1.12.0                   # SFTTrainer (§8) and GRPOTrainer (§9)
+bitsandbytes==0.50.1          # QLoRA (quantized low-rank adaptation) 4-bit
+triton==3.7.1                 # pulled by torch; pinned so kernels don't drift
+flash-linear-attention==0.5.2 # fused gated-delta kernels for the Qwen3.5 hybrid
+                              # layers (24 of 32); transformers picks them up
+                              # by import. Needs a C compiler for Triton's JIT:
+                              # `conda install -n vimBot -c conda-forge c-compiler`
+                              # (gcc 15.2, env-local; 2026-09-16). GRPO steps
+                              # ~26 s -> ~14 s, SFT ~8 s -> 6.3 s; greedy outputs
+                              # differ from the pure-torch path on ~10% of rows
+                              # (DECISIONS.md 2026-09-16). causal-conv1d, the
+                              # second kernel package, is NOT installed: no wheel
+                              # for torch 2.13/cu130, and building it needs nvcc.
+
+# --- experiment tracking ------------------------------------------------
+wandb==0.28.2                 # project `vimBot` (§8)
+
+# --- serving (§10) ------------------------------------------------------
+vllm==0.27.1                  # OpenAI-compatible endpoint; additive — it
+                              # does NOT move torch off 2.13.0 (verified).
+                              # Pinned DOWN from 0.28.0 on 2026-09-12: TRL 1.12.0
+                              # declares vllm<=0.27.1 and imports a class
+                              # (NCCLTrainerSendWeightsArgs) that 0.28.0 removed,
+                              # so `from trl import GRPOTrainer` failed on 0.28.0.
+                              # SFTTrainer never touched that import, which is
+                              # why SFT ran on the broken pair. TRL 1.13.0 has
+                              # the same import (DECISIONS.md 2026-09-12).
+mcp==2.1.1                    # the §10 MCP server (scripts/serve/mcp_server.py);
+                              # owner-approved 2026-10-13. The 2.x API: FastMCP
+                              # became mcp.server.MCPServer, and a tool's
+                              # structured output needs a typed return
+                              # (dict[str, Any], not a bare dict).
+
+# --- frontier teacher / baseline (§7.2, §8) -----------------------------
+anthropic==1.1.0              # needs ANTHROPIC_API_KEY, which is not set on
+                              # this machine — the §8 frontier k=0/k=5
+                              # baseline rows cannot be produced until it is
+
+# --- transitive, pinned because they decide file formats ---------------
+tokenizers==0.23.1
+safetensors==0.8.0
+numpy==2.3.5
+
+# NOT a pip dependency: llama.cpp is built from source for the §10 GGUF (GPT-Generated Unified Format)
+# export. Not installed yet.

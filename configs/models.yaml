@@ -1,0 +1,119 @@
+# configs/models.yaml — the single model registry (CLAUDE.md §4).
+#
+# Every script that touches a model takes --model <registry-name> and reads
+# this file. No HF (Hugging Face) repo (repository) ids, chat-template kwargs, or stop tokens may be
+# hardcoded anywhere else. Adding a model = one entry here + one DECISIONS.md
+# line, zero code changes. Artifacts are keyed by registry name:
+# runs/<name>/preds_<split>.jsonl, W&B (Weights & Biases) run names, RESULTS.md rows.
+#
+# Field notes:
+#   hf_id / revision      exact repo id + commit pin (verified 2026-08-13 via
+#                         the HF API (application programming interface); re-pin deliberately, never implicitly)
+#   chat_template_kwargs  passed to tokenizer.apply_chat_template; the §6
+#                         prompt text itself is identical for every model
+#   stop                  generation stop sequences (template end token; the
+#                         one-line output grammar is enforced by parsing, not
+#                         by stop strings)
+#   max_seq_len           tokenizer/serving ceiling; SFT (supervised fine-tuning) truncation is a
+#                         training-config concern (§8 uses 1024)
+#   lora_target_modules   default all-linear per §8
+#   ref_cost_per_mtok     [input, output] USD per 1M tokens for the §11 cost
+#                         metric; null for local models — derived from
+#                         measured throughput at a stated GPU-hour rate at
+#                         serving time (§10/§11)
+#   vllm_extra_args       extra flags for the serve helper
+
+models:
+  qwen3.5-4b:                       # primary (§4)
+    hf_id: Qwen/Qwen3.5-4B
+    revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a   # 2026-03-02 release
+    chat_template_kwargs:
+      enable_thinking: false        # Qwen3.5 thinks by default; any <think>
+                                    # content in a completion is a format
+                                    # failure for every model (§4)
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    # Qwen3.5 is hybrid: each running sequence holds a linear-attention state
+    # (vLLM's Mamba cache); at serve.sh's 0.55 of the card there are 212, and
+    # vLLM's default of 256 sequences refused to start (2026-10-13).
+    vllm_extra_args: ["--max-num-seqs", "128"]
+    # Model-card recommended non-thinking sampling (recorded 2026-08-13):
+    # temperature 0.7, top_p 0.8, top_k 20, min_p 0.0, presence_penalty 1.5.
+    # Decoding policy is chosen by the baseline/eval scripts, not pinned here.
+
+  qwen3.5-2b:                       # size ablation (owner, 2026-09-09):
+    hf_id: Qwen/Qwen3.5-2B          # comparison row, same recipe as the 4B
+    revision: 15852e8c16360a2fea060d615a32b45270f8a8fc   # 2026-03-02 release
+    chat_template_kwargs:
+      enable_thinking: false
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  qwen3.5-0.8b:                     # size ablation (owner, 2026-09-09):
+    hf_id: Qwen/Qwen3.5-0.8B        # comparison row, same recipe as the 4B
+    revision: 2fc06364715b967f1860aea9cf38778875588b17   # 2026-03-02 release
+    chat_template_kwargs:
+      enable_thinking: false
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  qwen3.5-9b:                       # fallback (§4) and size ablation; bf16 does
+                                    # not fit for training on 24 GB: QLoRA (NF4)
+    hf_id: Qwen/Qwen3.5-9B
+    revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a   # 2026-03-02 release
+    chat_template_kwargs:
+      enable_thinking: false
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  qwen3-4b-2507:                    # batch 2 (owner, 2026-09-11): the dense
+    hf_id: Qwen/Qwen3-4B-Instruct-2507   # control for the hybrid 4B; instruct-only,
+    revision: cdbee75f17c01a7cc42f958dc650907174af0554   # no thinking mode
+    chat_template_kwargs: {}
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  granite-4.2-8b:                   # batch 2 (owner, 2026-09-11): dense 8B,
+    hf_id: ibm-granite/granite-4.2-8b    # 100k vocab, Apache-2.0; QLoRA on 24 GB
+    revision: f8de16cdcdbc6c779ca517604e050d82cc119e44   # 2026-09-04
+    chat_template_kwargs:
+      enable_thinking: false        # template pre-fills an empty <think></think>
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  seed-coder-8b:                    # batch 2 (owner, 2026-09-11): code-specialized
+    hf_id: ByteDance-Seed/Seed-Coder-8B-Instruct   # dense 8B, MIT; QLoRA on 24 GB
+    revision: 1c5af72afa21c22c9272a0b60a3a404195e88fcd   # 2025-06-06
+    chat_template_kwargs: {}        # no thinking mode
+    stop: ["<[end▁of▁sentence]>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  qwen2.5-coder-7b:                 # fallback: format adherence is the
+    hf_id: Qwen/Qwen2.5-Coder-7B-Instruct   # persistent failure mode
+    revision: c03e6d358207e414f1eca0bb1891e29f1db0e242
+    chat_template_kwargs: {}        # no thinking mode on this model
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
