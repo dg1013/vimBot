@@ -16,20 +16,18 @@ Two modes:
 Two entry points:
   - run_vim(buffer_before, ...)   buffer supplied as a string
   - run_vim_on_file(path, ...)    buffer read from a file on disk. The source
-                                  file is READ-ONLY by default: only its contents enter
-                                  the sandbox, vim never sees the real path. Pass
-                                  output_path to write the result elsewhere;
-                                  an existing output_path is refused by
-                                  default (on_exists="refuse").
+                                  file is READ-ONLY: only its contents enter
+                                  the sandbox, vim never sees the real path,
+                                  and nothing is ever written back. The
+                                  executor writes no files at all (owner
+                                  decision 2026-09-04): persistence belongs
+                                  to the harness, and in real use to the user.
 
 Command line:
     python src/executor.py --command '%s/foo/bar/g' --file notes.txt
     python src/executor.py --command 'dd' --mode keys --text $'a\\nb'
-    python src/executor.py --command 'sort u' --file n.txt --output s.txt \\
-                           --on-exists suffix
 Resulting buffer goes to stdout, diagnostics to stderr. Exit 0 on success,
-1 if the command was invalid, 2 if the command ran but --output could not
-be written (it already existed and --on-exists was "refuse").
+1 if the command was invalid. Redirect stdout to keep a result.
 
 Safety measures (model output is untrusted input):
   - a static scope screen (src/scope.py) refuses damage-capable commands
@@ -37,8 +35,8 @@ Safety measures (model output is untrusted input):
     'set write', which would otherwise re-enable writing and defeat the
     'nowrite' guard below (verified: it does, in BOTH modes)
   - vim runs with -Z (restricted mode): :!, system(), :shell are disabled
-  - -u NONE -i NONE -n: no user config, no viminfo, no swap
-  - cwd is a throwaway temp dir that is deleted afterwards
+  - -u NONE -i NONE -n: no user config (configuration), no viminfo, no swap
+  - cwd is a throwaway temp dir (directory) that is deleted afterwards
   - hard wall-clock timeout kills hung sessions (interactive prompts,
     runaway :g commands, recursive macros)
 
@@ -55,6 +53,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Optional
 
 from scope import screen_dangerous
@@ -87,10 +86,30 @@ _KEYMAP = {
 # 'nrformats' is a correctness pin, not a safety one. -u NONE skips vim's
 # defaults.vim, whose line 60 is `set nrformats-=octal`; neovim excludes octal
 # by default too. Without this, <C-a> on 007 yields 010 here and 008 in every
-# editor a user actually runs -- so the reward oracle, the MCP server and the
+# editor a user actually runs -- so the reward oracle, the MCP (Model Context Protocol) server and the
 # neovim plugin would disagree about the same keystroke. Measured 2026-08-11:
 # this is the only option difference that changes any dataset buffer between
 # a bare -u NONE vim and a defaults.vim one.
+#
+# 'textwidth' is deliberately NOT pinned here, and the reason is worth stating
+# because it looks like it belongs. Found 2026-08-26: with textwidth at its
+# default of 0, `gq` wraps at min(columns, 79), so reflow gold depends on the
+# COLUMNS *environment variable* of whatever spawned vim -- the same `gqq`
+# gives 2 lines under a default terminal and 4 under COLUMNS=40. That is the
+# nrformats hazard again, sourced from the environment.
+#
+# Pinning `set textwidth=79` was tried and rejected: textwidth also drives
+# insert-mode auto-wrap, so it silently rewraps long inserted text for every
+# i/a/o/c command, not just for gq. Measured, it reproduced all 11 pre-existing
+# gq golds but broke hc-0663 (a `cis` whose replacement sentence auto-wrapped).
+# Trading a behavior change across the whole insert-edit category for 30 reflow
+# rows is the wrong direction, and most editors a user runs have textwidth=0
+# for code anyway.
+#
+# The convention instead: a reflow case states its own width in its command
+# (`:set tw=72<CR>gqip`), which makes that row reproducible on any terminal and
+# self-documenting about the width it expects. tests/test_executor.py pins both
+# halves of this -- the hazard, so it is not rediscovered, and the fix.
 #
 # Keep this the single source for both modes: a setting added to only one of
 # the two code paths is exactly the bug tests/test_executor.py pins against.
@@ -121,6 +140,104 @@ def convert_keys(seq: str) -> str:
     return "".join(out)
 
 
+# ---------------------------------------------------------------- isolation
+#
+# The static screen in src/scope.py is a denylist over a language with
+# abbreviations and dynamic evaluation. On 2026-08-18 it was defeated sixteen
+# different ways -- expression contexts reaching writefile(), plus four plain
+# command words nobody had enumerated. The screen was fixed, but the lesson is
+# the one src/scope.py's own docstring states: a denylist raises the bar, it
+# does not close the door.
+#
+# This is the door. The vim process runs inside an unprivileged user +
+# mount namespace where the whole filesystem is read-only EXCEPT the throwaway
+# temp directory holding the buffer. writefile() to any other path then fails
+# at the kernel, whatever the command string says.
+#
+# Requires only util-linux `unshare` and unprivileged user namespaces; no
+# daemon, no image, no root. Where that is unavailable (macOS, hardened
+# kernels), behaviour follows the [executor] isolation setting:
+#   "namespace" -- use it when available, warn loudly once when not (default)
+#   "required"  -- refuse to run without it
+#   "none"      -- disabled; the screen is then the only protection
+_ISOLATION_SH = (
+    'mount --make-rprivate / 2>/dev/null;'
+    'mount --bind "$1" "$1" 2>/dev/null;'
+    'mount -o remount,bind,ro / 2>/dev/null;'
+    'mount -o remount,bind,rw "$1" 2>/dev/null;'
+    'shift; exec "$@"'
+)
+
+_ISOLATION_PROBE: bool | None = None
+_ISOLATION_WARNED = False
+# The probe takes ~200 ms (milliseconds). Without this lock, a thread pool (the sec 9 GRPO (Group Relative Policy Optimization)
+# reward workers use ~8) races: the first caller has not finished probing when
+# the others look, and every one of them silently runs vim with no OS (operating system) boundary.
+# Found 2026-08-18 by watching the fallback warning fire under a parallel gate.
+_ISOLATION_LOCK = threading.Lock()
+
+
+def _isolate(argv: list, sandbox_dir: str) -> list:
+    """Wrap argv so it runs with everything but `sandbox_dir` read-only."""
+    return ["unshare", "--user", "--map-root-user", "--mount",
+            "sh", "-c", _ISOLATION_SH, "sh", sandbox_dir] + argv
+
+
+def isolation_available() -> bool:
+    """Probe once whether the namespace actually blocks an outside write.
+
+    Deliberately empirical: `unshare` existing proves nothing, because the
+    remount can silently fail on some kernels and leave the process with a
+    fully writable filesystem.
+    """
+    global _ISOLATION_PROBE
+    if _ISOLATION_PROBE is not None:
+        return _ISOLATION_PROBE
+    with _ISOLATION_LOCK:
+        # re-check: another thread may have finished probing while we waited
+        if _ISOLATION_PROBE is not None:
+            return _ISOLATION_PROBE
+        if shutil.which("unshare") is None:
+            _ISOLATION_PROBE = False
+            return False
+        outside = tempfile.mkdtemp(prefix="vimBot_probe_out_")
+        inside = tempfile.mkdtemp(prefix="vimBot_probe_in_")
+        result = False
+        try:
+            blocked = subprocess.run(
+                _isolate(["touch", os.path.join(outside, "x")], inside),
+                capture_output=True, timeout=10).returncode != 0
+            allowed = subprocess.run(
+                _isolate(["touch", os.path.join(inside, "x")], inside),
+                capture_output=True, timeout=10).returncode == 0
+            result = bool(blocked and allowed)
+        except (OSError, subprocess.SubprocessError):
+            result = False
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+            shutil.rmtree(inside, ignore_errors=True)
+        _ISOLATION_PROBE = result
+        return result
+
+
+def _apply_isolation(argv: list, sandbox_dir: str, policy: str) -> list:
+    global _ISOLATION_WARNED
+    if policy == "none":
+        return argv
+    if isolation_available():
+        return _isolate(argv, sandbox_dir)
+    if policy == "required":
+        raise RuntimeError(
+            "[executor] isolation = 'required' but unprivileged user namespaces "
+            "are unavailable here; refusing to run vim without an OS boundary."
+        )
+    if not _ISOLATION_WARNED:
+        _ISOLATION_WARNED = True
+        print("warning: OS isolation unavailable (no usable user namespace); "
+              "src/scope.py is the only protection for this run.", file=sys.stderr)
+    return argv
+
+
 def run_vim(
         buffer_before: str,
         command: str,
@@ -129,6 +246,7 @@ def run_vim(
         timeout: float = 5.0,
         restricted: bool = True,
         vim_bin: str = "vim",
+        isolation: str = "namespace",
 ) -> dict:
     """Execute `command` against `buffer_before` in headless vim.
 
@@ -156,6 +274,9 @@ def run_vim(
       blocked      str   -- present ONLY when the command was refused by the
                            scope screen before vim was spawned; the reason.
                            Absent on every command that actually ran.
+
+    An ex command holding a NUL byte cannot be passed to vim and comes back
+    invalid (was_valid False, buffer_after None) without vim being spawned.
     """
     if mode not in ("ex", "keys"):
         raise ValueError(f"unknown mode: {mode!r}")
@@ -172,6 +293,26 @@ def run_vim(
             "timeout": False,
             "stderr": f"blocked: {blocked}",
             "blocked": blocked,
+        }
+
+    # An ex command reaches vim in argv, and argv cannot carry a NUL byte
+    # (execve takes NUL-terminated strings; subprocess raises ValueError
+    # rather than truncate). Raising here aborted every caller -- a whole
+    # evaluate.score call, the §9 reward -- when the base model sampled
+    # `2\x00a` at T = 1 (2026-09-22, DECISIONS.md). No other channel carries
+    # the command as written either: a sourced script cuts the line at the
+    # NUL, so `s/foo/<NUL>/` would run as `s/foo/` and exit 0. So it is
+    # invalid, returned like any vim error; never stripped, which would turn
+    # a right answer plus a stray NUL into a match. After the screen, so a
+    # dangerous command still reports `blocked`; keys mode is untouched, since
+    # keys go through a file, where NUL is a key (insert-mode CTRL-@).
+    if mode == "ex" and "\x00" in command:
+        return {
+            "was_valid": False,
+            "buffer_after": None,
+            "return_code": None,
+            "timeout": False,
+            "stderr": "invalid: NUL byte in an ex command (argv cannot carry it to vim)",
         }
 
     tmpdir = tempfile.mkdtemp(prefix="vimBot_")
@@ -196,10 +337,18 @@ def run_vim(
                 cmd = cmd[1:]
             # execute-with-quoting makes bars inside patterns safe, and
             # try/catch turns any command error into a nonzero exit (cquit).
-            # 'nowrite' is set around the untrusted command so it cannot
-            # write files anywhere; our own wq! re-enables writing first.
+            # The exception text (e.g. "Vim(substitute):E486: Pattern not
+            # found: foo") is written to a file INSIDE the sandbox dir -- the
+            # one place vim may write -- and surfaces in the result's
+            # `stderr`, so a failing command is diagnosable (2026-09-05, for
+            # the §9 error analysis). 'nowrite' is set around the untrusted
+            # command so it cannot write files anywhere; our own wq!
+            # re-enables writing first.
             quoted = cmd.replace("'", "''")
-            wrapped = f"try | execute '{quoted}' | catch | cquit! | endtry"
+            err_path = os.path.join(tmpdir, "exception.txt")
+            wrapped = (f"try | execute '{quoted}' | catch | "
+                       f"call writefile([v:exception], '{err_path}') | "
+                       f"cquit! | endtry")
             argv += ["-es"]
             for opt in _OPTION_BASELINE:
                 argv += ["-c", opt]
@@ -224,6 +373,8 @@ def run_vim(
                 fh.write(payload.encode("latin-1", "replace"))
             argv += ["-s", script_path, buf_path]
 
+        argv = _apply_isolation(argv, tmpdir, isolation)
+
         try:
             proc = subprocess.run(
                 argv,
@@ -246,72 +397,22 @@ def run_vim(
             with open(buf_path, "r", encoding="utf-8", errors="replace") as fh:
                 buffer_after = fh.read()
 
-        return {
+        result = {
             "was_valid": proc.returncode == 0,
             "buffer_after": buffer_after,
             "return_code": proc.returncode,
             "timeout": False,
-            "stderr": proc.stderr.decode("utf-8", errors="replace")[-500:],
+            "stderr": proc.stderr.decode("utf-8", errors="replace")[-1000:],
         }
+        exc_path = os.path.join(tmpdir, "exception.txt")
+        if os.path.exists(exc_path):
+            with open(exc_path, "r", encoding="utf-8", errors="replace") as fh:
+                exc = fh.read().strip()
+            if exc:
+                result["stderr"] = ("vim: " + exc + "\n" + result["stderr"])[-1000:]
+        return result
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-ON_EXISTS_MODES = ("refuse", "overwrite", "suffix")
-
-# Upper bound on the numbered variants tried in "suffix" mode, so a directory
-# full of collisions fails loudly instead of spinning.
-_SUFFIX_LIMIT = 500
-
-
-def _numbered(path: str, n: int) -> str:
-    """out.txt -> out_1.txt  (before the extension, so globs and file-type
-    detection keep working; out.txt_1 would break both)."""
-    root, ext = os.path.splitext(path)
-    return f"{root}_{n}{ext}"
-
-
-def _write_output(output_path, text: str, on_exists: str) -> str:
-    """Write `text`, honoring the conflict policy. Returns the path written.
-
-    Uses open(..., "x") -- an atomic create-if-absent -- rather than
-    os.path.exists() followed by a write. The two-step version has a
-    time-of-check/time-of-use window that concurrent workers (the GRPO reward
-    pool is ~8 threads) can slip through; "x" closes it in one syscall.
-    """
-    if on_exists == "overwrite":
-        with open(output_path, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        return str(output_path)
-
-    if on_exists == "refuse":
-        try:
-            with open(output_path, "x", encoding="utf-8") as fh:
-                fh.write(text)
-        except FileExistsError:
-            raise FileExistsError(
-                f"{output_path} already exists and nothing was written. Pass "
-                f"on_exists='overwrite' to replace it, or on_exists='suffix' "
-                f"to write alongside it (CLI: --on-exists)."
-            ) from None
-        return str(output_path)
-
-    # "suffix": first free numbered variant. Losing the race to another
-    # worker just means the next candidate is tried, so this stays correct
-    # under concurrency instead of silently clobbering.
-    candidate = str(output_path)
-    for n in range(_SUFFIX_LIMIT + 1):
-        if n:
-            candidate = _numbered(str(output_path), n)
-        try:
-            with open(candidate, "x", encoding="utf-8") as fh:
-                fh.write(text)
-            return candidate
-        except FileExistsError:
-            continue
-    raise FileExistsError(
-        f"{output_path}: no free filename after {_SUFFIX_LIMIT} attempts"
-    )
 
 
 def run_vim_on_file(
@@ -322,8 +423,6 @@ def run_vim_on_file(
         timeout: float = 5.0,
         restricted: bool = True,
         vim_bin: str = "vim",
-        output_path=None,
-        on_exists: str = "refuse",
 ) -> dict:
     """Execute `command` against the contents of the file at `path`.
 
@@ -331,63 +430,30 @@ def run_vim_on_file(
     sandbox; vim is never pointed at the real path, so every guarantee of
     run_vim() (restricted mode, 'nowrite', throwaway cwd, hard timeout)
     applies unchanged and no generated command can damage the original.
+    Nothing is written anywhere: the executor returns the buffer and the
+    caller decides what to do with it (train/test/validation only, per the
+    §1 execution boundary; owner decision 2026-09-04).
 
     `path` may be a str or os.PathLike. A missing file raises
     FileNotFoundError -- that is a usage error, distinct from the
     `was_valid: False` result that signals a failing *command*.
 
-    If `output_path` is given, the resulting buffer is written there, but
-    only when the command ran successfully. Writing to the source file is
-    refused (ValueError) -- that is what makes "read-only" an enforced
-    invariant rather than a convention.
-
-    `on_exists` decides what happens when output_path is already taken:
-      "refuse"    (default) raise FileExistsError, write nothing
-      "overwrite" replace it
-      "suffix"    write out_1.txt, out_2.txt, ... -- never overwrites, but
-                  the caller MUST read written_to, since the result did not
-                  land where it was asked to go
-
     Returns the run_vim() dict plus:
       source_path  str        the file that was read
-      written_to   str|None   the file ACTUALLY written (may differ from
-                              output_path under "suffix"), or None if
-                              nothing was written
     """
-    if on_exists not in ON_EXISTS_MODES:
-        raise ValueError(
-            f"unknown on_exists: {on_exists!r} (expected one of {ON_EXISTS_MODES})"
-        )
-
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         buffer_before = fh.read()
-
-    if output_path is not None:
-        source_real = os.path.realpath(path)
-        if os.path.realpath(output_path) == source_real:
-            raise ValueError(
-                "output_path must differ from the source file: "
-                "run_vim_on_file never modifies its input"
-            )
 
     result = run_vim(
         buffer_before, command, mode=mode, cursor=cursor,
         timeout=timeout, restricted=restricted, vim_bin=vim_bin,
     )
     result["source_path"] = str(path)
-    result["written_to"] = None
-
-    if output_path is not None and result["was_valid"] and result["buffer_after"] is not None:
-        text = result["buffer_after"]
-        if text and not text.endswith("\n"):
-            text += "\n"
-        result["written_to"] = _write_output(output_path, text, on_exists)
-
     return result
 
 
 def _main(argv=None) -> int:
-    """CLI: run one command against a file or a literal string.
+    """CLI (command-line interface): run one command against a file or a literal string.
 
     Flag defaults come from the settings file (configs/settings.toml), so
     precedence is: CLI flag > settings file > built-in default.
@@ -424,12 +490,6 @@ def _main(argv=None) -> int:
     ap.add_argument("--col", type=int, default=1, help="cursor column (1-based)")
     ap.add_argument("--timeout", type=float, default=cfg["timeout"])
     ap.add_argument("--vim", default=cfg["vim_bin"], help="vim binary to use")
-    ap.add_argument("--output", help="write the resulting buffer here "
-                                     "(must differ from --file)")
-    ap.add_argument("--on-exists", choices=ON_EXISTS_MODES,
-                    default=cfg["on_exists"],
-                    help="what to do if --output already exists "
-                         f"(default: {cfg['on_exists']}, from settings)")
     args = ap.parse_args(argv)
 
     # NOTE: the sandbox is deliberately not configurable from the CLI.
@@ -437,28 +497,10 @@ def _main(argv=None) -> int:
         mode=args.mode, cursor=(args.line, args.col),
         timeout=args.timeout, vim_bin=args.vim,
     )
-    write_error = None
     if args.file is not None:
-        try:
-            result = run_vim_on_file(args.file, args.command,
-                                     output_path=args.output,
-                                     on_exists=args.on_exists, **common)
-        except FileExistsError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2  # nothing was written; re-run without --output to see it
+        result = run_vim_on_file(args.file, args.command, **common)
     else:
         result = run_vim(args.text, args.command, **common)
-        result["written_to"] = None
-        if args.output is not None and result["was_valid"] \
-                and result["buffer_after"] is not None:
-            text = result["buffer_after"]
-            if text and not text.endswith("\n"):
-                text += "\n"
-            try:
-                result["written_to"] = _write_output(args.output, text,
-                                                     args.on_exists)
-            except FileExistsError as exc:
-                write_error = exc
 
     if result["buffer_after"] is not None:
         sys.stdout.write(result["buffer_after"])
@@ -467,11 +509,6 @@ def _main(argv=None) -> int:
     print(f"[was_valid={result['was_valid']} {status}]", file=sys.stderr)
     if result["stderr"].strip():
         print(result["stderr"].strip(), file=sys.stderr)
-    if result["written_to"]:
-        print(f"[wrote {result['written_to']}]", file=sys.stderr)
-    if write_error is not None:
-        print(f"error: {write_error}", file=sys.stderr)
-        return 2  # command may be fine; the OUTPUT was not written
 
     return 0 if result["was_valid"] else 1
 

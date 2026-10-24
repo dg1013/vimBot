@@ -1,8 +1,8 @@
-"""Project settings: a TOML file that overrides built-in defaults.
+"""Project settings: a TOML (Tom's Obvious Minimal Language) file that overrides built-in defaults.
 
 Precedence, highest first:
 
-    CLI flag  >  configs/settings.toml  >  built-in default
+    CLI (command-line interface) flag  >  configs/settings.toml  >  built-in default
 
 There is deliberately no environment-variable layer: two sources of truth are
 easier to reason about than three, and "why is the timeout 10?" has exactly
@@ -33,7 +33,7 @@ DEFAULTS = {
         "timeout": 5.0,        # seconds of wall clock per vim run
         "vim_bin": "vim",      # binary to invoke
         "mode": "ex",          # default command mode
-        "on_exists": "refuse",  # output_path conflict policy
+        "isolation": "namespace",  # "namespace" | "required" | "none"
     },
     "generate": {
         "max_buffer_lines": 60,
@@ -58,7 +58,6 @@ DEFAULTS = {
 # create a cycle; tests assert these stay in sync with the real definitions.
 _ALLOWED = {
     ("executor", "mode"): ("ex", "keys"),
-    ("executor", "on_exists"): ("refuse", "overwrite", "suffix"),
 }
 
 
@@ -132,7 +131,7 @@ def load_settings(path=None) -> Settings:
     """Load settings, falling back to built-in defaults.
 
     `path` None means the standard location (configs/settings.toml). A
-    missing file at the standard location is fine -- the repo works without
+    missing file at the standard location is fine -- the repo (repository) works without
     one. A missing file at an EXPLICIT path is an error, since the caller
     clearly meant to use it.
     """
