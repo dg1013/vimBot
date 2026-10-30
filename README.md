@@ -29,17 +29,19 @@ a sandboxed execution verifier, and a reward function with anti-gaming
 terms — the same artifact class frontier labs now build and buy at scale
 for post-training.
 
-## Where it stands (2026-09-10)
+## Where it stands (2026-10-30)
 
 | | |
 |---|---|
-| corpus | **7,541** validated cases, 17 categories × 3 tiers, every quota cell full |
-| gold self-check | 7,541 / 7,541 — every case's own command reproduces its buffer |
-| splits | train 6,551 · val 545 · test 445, frozen by id, no template or command spanning two splits |
-| human verification | **445 / 445** test rows carry an owner verdict against their current text |
-| baseline → SFT | qwen3.5-4b zero-shot exec-match 13.5% → **47.2%** after SFT round 1, at 30% fewer output tokens (445-row test slice, 2026-09-10) |
+| corpus | **7,522** validated cases, 17 categories × 3 tiers; 46 of the 51 quota cells full, the other five 1–2 rows short after the 2026-09-16 and 2026-09-25 reviews (7,541 rows before them) |
+| gold self-check | 7,522 / 7,522 — every case's own command reproduces its buffer (2026-09-25) |
+| splits | train 6,548 · val 545 · test 429 (test v2), frozen by id, no template or command spanning two splits |
+| human verification | **429 / 429** test rows carry an owner verdict against their current text; the 54 rows no sampled answer solved in the pass@k run were re-read on 2026-09-25 (31 reworded, 16 dropped) |
+| baseline → SFT → GRPO | qwen3.5-4b zero-shot exec-match 13.8% → 49.4% after SFT round 1 → **54.3%** after GRPO and one difficulty-gated GRPO epoch, at 16 output tokens per answer (429-row test v2; this is the served 4B adapter) |
+| asking first | the served 4B asks one clarifying question when its top sampled answer holds at most 5 of 8 samples: **59.7%** on test v2, asking on 40% of rows (+35 / −12 rows against never asking, McNemar p = 0.001; 2026-10-10) |
+| served, one RTX 3090 | vLLM: the 4B's greedy answer 54.3% at 0.16 s p50 and $0.005 per 1,000 solved; the pooled pick (4 + 4 samples from the 4B and the 9B, the 4B as verifier) **66.0%** at 0.84 s and $0.11 per 1,000 solved, at a stated $0.30 per GPU-hour (2026-10-19/21) |
 | size ablation | identical recipe on 0.8B / 2B / 4B / 9B: full-val exec-match 27.0 / 34.1 / 44.4 / 48.3%; the 4B stays primary (2026-09-10) |
-| tests | 532 green |
+| tests | **906 green** (2026-10-30): 646 in `tests/`, 260 across the 21 `scripts/` folders, each folder run on its own |
 
 Numbers and how each was measured live in `RESULTS.md`; every decision
 behind them is in `DECISIONS.md`, newest first.
@@ -134,8 +136,9 @@ contribution. Pipeline:
    anything verbatim.
 
 Target: ~5–20k validated training pairs; a few hundred eval cases.
-**Status:** 7,541 pairs and a 445-case human-verified test slice, so the
-data phase has met its target; what remains is training against it.
+**Status:** 7,522 pairs and a 429-case human-verified test slice (test v2),
+so the data phase has met its target; the training rows in the table above
+are measured against it.
 
 ## Training plan (phase 2)
 
