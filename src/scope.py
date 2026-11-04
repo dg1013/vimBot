@@ -79,11 +79,11 @@ _SHELL = {
 _SCRIPTING = {
     # can construct a write dynamically, or replay arbitrary keys
     "norm", "norma", "normal", "exe", "exec", "execu", "execut", "execute",
-    "cal", "call", "let", "unl", "unlet", "sil", "silent",
+    "cal", "call", "let", "unl", "unlet", "sil", "sile", "silen", "silent",
     "py", "pyt", "pyth", "pytho", "python", "py3", "python3", "pyx",
     "lua", "perl", "rub", "ruby", "mz", "mzscheme", "tcl",
     "fu", "fun", "func", "functi", "functio", "function",
-    "sandbox", "debug",
+    "san", "sand", "sandb", "sandbo", "sandbox", "debug",
 }
 
 _EVALUATES_EXPRESSION = {
@@ -200,6 +200,49 @@ _EX_HEAD = re.compile(
     r"^(?:'.|[\s%$.,;+\-0-9])*([a-zA-Z]+|[<>]+|[&~=#*@!])(!?)\s*(.*)$",
     re.DOTALL)
 
+# Command modifiers run the command after them, so that is the command to
+# screen. _EX_HEAD stops at the first word, so `keepjumps w! /path`, `to r /etc/x`
+# and `3verbose normal ix` all screened as the modifier and passed (found
+# 2026-11-02; on 2026-11-04 every word below, at every abbreviation down to the
+# shortest here, was confirmed against vim 8.2 as both working and hiding the
+# verb). Refusing them outright would lose `keeppatterns %s/a/b/`, which is a
+# fine command, so they are stripped and the rest is screened.
+#
+# silent and sandbox are not here because they are refused by name.
+_MODIFIERS = {
+    word[:length]
+    for word, shortest in (
+        ("aboveleft", 3), ("belowright", 3), ("botright", 2), ("browse", 3),
+        ("confirm", 4), ("hide", 3), ("keepalt", 3), ("keepjumps", 3),
+        ("keepmarks", 3), ("keeppatterns", 3), ("leftabove", 5), ("legacy", 3),
+        ("lockmarks", 3), ("noautocmd", 3), ("noswapfile", 3), ("rightbelow", 6),
+        ("tab", 3), ("topleft", 2), ("unsilent", 3), ("verbose", 4), ("vertical", 4),
+    )
+    for length in range(shortest, len(word) + 1)
+}
+
+# :vim9cmd is the same thing, but _EX_HEAD splits it into the word "vim" and
+# the rest "9cmd w! /path".
+_VIM9CMD = re.compile(r"9(?:c|cm|cmd)?\s+(.*)$", re.DOTALL)
+
+
+def _strip_modifiers(segment: str) -> str:
+    """The command a segment really runs. A loop, because recursion would let a
+    long enough `tab tab tab ...` raise out of run_vim and abort a whole run."""
+    while True:
+        m = _EX_HEAD.match(segment)
+        if not m:
+            return segment
+        word, rest = m.group(1).lower(), m.group(3)
+        hidden = _VIM9CMD.match(rest) if word == "vim" else None
+        if word in _MODIFIERS:
+            segment = rest
+        elif hidden:
+            segment = hidden.group(1)
+        else:
+            return segment
+
+
 # :global / :vglobal run another command per matching line -- screen it too.
 _GLOBAL_WORDS = {"g", "gl", "glo", "glob", "globa", "global",
                  "v", "vg", "vgl", "vglo", "vglob", "vgloba", "vglobal"}
@@ -209,7 +252,7 @@ _CR_TOKENS = ("<CR>", "<cr>", "<Enter>", "<enter>", "<Return>", "<return>")
 
 def _screen_ex_segment(segment: str) -> str | None:
     """Screen one bar-separated ex segment. Returns a reason or None."""
-    segment = segment.strip()
+    segment = _strip_modifiers(segment.strip()).strip()
     if not segment:
         return None
 
