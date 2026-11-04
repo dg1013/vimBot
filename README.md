@@ -50,6 +50,7 @@ behind them is in `DECISIONS.md`, newest first.
 
 ```
 src/executor.py     sandboxed headless-vim runner (stdlib only) — the oracle
+src/sandbox.py      the box vim runs in, which assumes vim is compromised
 src/evaluate.py     execution-match eval with per-category breakdown
 src/prompt.py       the §6 model I/O contract, implemented once
 src/paste.py        keys-mode output rendered as one pasteable ex line
@@ -62,7 +63,7 @@ scripts/            corpus build, split refresh, curation, review pages
 ## Quickstart
 
 ```bash
-# needs vim (not vim-tiny) on PATH; python3, stdlib only
+# needs vim.basic (not vim-tiny) and bubblewrap; python3, stdlib only
 python3 src/evaluate.py --cases data/seed_cases.jsonl          # gold self-check
 python3 src/evaluate.py --cases data/seed_cases.jsonl \
                         --predictions runs/your_model.jsonl    # score a model
@@ -97,21 +98,27 @@ vim's surface area is the main way this project dies.
 
 ## Sandbox / threat model
 
-Model-generated commands are untrusted input. The executor runs vim with:
+Model-generated commands are untrusted input, and in real use the model reads the
+user's file, so whatever that file says can steer the commands it samples. The
+sandbox therefore assumes vim itself is compromised, and every call runs in a box
+built with [bubblewrap](https://github.com/containers/bubblewrap) (`src/sandbox.py`):
 
-- `-Z` restricted mode — `:!`, `system()`, `:shell` disabled
-- `'nowrite'` set around the untrusted command — writes to arbitrary paths
-  blocked in both modes (`:w /etc/x` → error → marked invalid); the
-  harness's own final `wq!` re-enables writing first
-- `-u NONE -i NONE -n` — no user config (configuration), viminfo, or swap
-- throwaway temp cwd, deleted after each run
-- hard wall-clock timeout — kills interactive waits and infinite loops
-  (`:while 1 | endwhile` dies at the timeout, verified)
+- an empty, read-only root holding only `/usr`, two devices and a scratch directory,
+  so home directories, drives and sockets do not exist for the process inside
+- no network, no privileges, and its own process list
+- a syscall allowlist of 57 names, with everything else refused
+- limits on memory, file size, open files and CPU time, and no crash dumps
+- a fixed environment and a pinned vim build, so the verifier's answer cannot depend
+  on the machine, the clipboard or the caller
+- results read back as hostile data: no following links, no blocking, size-capped
+- a box that fails to start raises an error rather than scoring as an invalid command
 
-This targets *accidental* damage from generated commands, which is the real
-risk in a data/eval loop. It is not a hardened jail against an adversarial
-model (a keys-mode command could `:set write` itself); for large-scale
-generation, run workers in a container as an unprivileged user anyway.
+Inside the box, defense in depth: `-Z` restricted mode, `'nowrite'` around the
+untrusted command, `-u NONE -i NONE -n`, a static scope screen, and a hard
+wall-clock timeout.
+
+A kernel bug reachable through the allowed syscalls is out of scope. That would need
+a VM.
 
 ## Data plan (phase 1)
 

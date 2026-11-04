@@ -31,9 +31,8 @@ DEFAULT_SETTINGS_PATH = REPO / "configs" / "settings.toml"
 DEFAULTS = {
     "executor": {
         "timeout": 5.0,        # seconds of wall clock per vim run
-        "vim_bin": "vim",      # binary to invoke
+        "vim_bin": "vim.basic",  # binary to invoke; see executor.VIM_BIN
         "mode": "ex",          # default command mode
-        "isolation": "namespace",  # "namespace" | "required" | "none"
     },
     "generate": {
         "max_buffer_lines": 60,

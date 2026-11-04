@@ -44,12 +44,7 @@ def test_settings_object_exposes_values_and_sources():
 # means a deliberate decision -- this dict is where those decisions are
 # recorded. Adding an entry here should come with a DECISIONS.md line; a key
 # that turns up uncommented WITHOUT an entry is the accident this guards.
-SHIPPED_OVERRIDES = {
-    # 2026-08-27: the "namespace" default degrades to no OS (operating system) boundary with only
-    # a stderr warning, leaving src/scope.py (six known past gaps) as the sole
-    # protection. "required" makes that a hard failure instead.
-    ("executor", "isolation"): "required",
-}
+SHIPPED_OVERRIDES = {}
 
 
 def test_shipped_settings_file_overrides_only_what_is_declared(tmp_path):
@@ -91,7 +86,7 @@ def test_file_overrides_default_and_records_source(tmp_path):
     assert s["executor"]["timeout"] == 12.5
     assert s.source("executor", "timeout") == "file"
     # untouched keys keep their defaults
-    assert s["executor"]["vim_bin"] == "vim"
+    assert s["executor"]["vim_bin"] == "vim.basic"
     assert s.source("executor", "vim_bin") == "default"
 
 

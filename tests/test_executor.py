@@ -155,13 +155,14 @@ def test_option_baseline_reaches_ex_mode_too():
     assert "hex" in nrformats, f"baseline clobbered nrformats entirely: {nrformats}"
 
 
-# A MEASURED LIMIT, not a pin (2026-08-26). With textwidth at its default 0,
-# `gq` wraps at min(columns, 79), so reflow gold depends on the COLUMNS
-# environment variable rather than on any vim setting. Pinning textwidth in
-# _OPTION_BASELINE was tried and rejected -- it also drives insert-mode
-# auto-wrap and broke hc-0663's `cis`. The convention is that a reflow case
-# states its own width. These two tests pin both halves: the hazard, so nobody
-# rediscovers it, and the fix that dataset rows are expected to use.
+# With textwidth at its default 0, `gq` wraps at min(columns, 79). Until
+# 2026-11-04 that made reflow gold depend on the COLUMNS environment variable of
+# whatever spawned vim. The box's fixed environment closed that, so the oracle
+# always wraps at 79. Pinning textwidth in _OPTION_BASELINE was tried and
+# rejected -- it also drives insert-mode auto-wrap and broke hc-0663's `cis`. A
+# user's editor still wraps at its own width, so a reflow case keeps stating its
+# own width. These two tests pin both: the oracle ignores the caller, and the
+# convention dataset rows are expected to use.
 
 _LONG = ("The importer reads the whole file into memory before validating any "
          "of it, which is fine for the sample data but falls over in prod.")
@@ -180,16 +181,12 @@ def _reflow_at(columns, keys):
             os.environ["COLUMNS"] = before
 
 
-def test_bare_gq_wrap_depends_on_terminal_width():
-    """Known limit: a gq gold with no explicit textwidth is not portable."""
+def test_bare_gq_wrap_ignores_the_callers_terminal_width():
+    """The caller's COLUMNS must not reach the oracle."""
     narrow = _reflow_at("40", "gqq")
     wide = _reflow_at("100", "gqq")
-    assert narrow != wide, (
-        "bare gq no longer varies with COLUMNS -- if textwidth was pinned in "
-        "_OPTION_BASELINE, check hc-0663 and the insert-edit category first, "
-        "then delete this test and its note in executor.py"
-    )
-    assert all(len(line) <= 39 for line in narrow), narrow
+    assert narrow == wide, "COLUMNS reached vim: the box's environment is leaking"
+    assert all(len(line) <= 79 for line in narrow), narrow
 
 
 def test_case_supplied_textwidth_makes_reflow_portable():

@@ -67,7 +67,7 @@ import re
 import sys
 from collections import defaultdict
 
-from executor import run_vim
+from executor import VIM_BIN, run_vim
 
 
 def _norm(text: str | None) -> list[str] | None:
@@ -109,7 +109,7 @@ def load_jsonl(path: str) -> list[dict]:
 
 
 def score(cases: list[dict], preds: dict[str, dict] | None = None,
-          timeout: float = 5.0, vim_bin: str = "vim") -> dict:
+          timeout: float = 5.0, vim_bin: str = VIM_BIN) -> dict:
     """Run every case through the sandbox and compare buffers.
 
     `preds` is None for the gold self-check (each case runs its own
@@ -206,7 +206,7 @@ def main() -> None:
     ap.add_argument("--cases", default="data/seed_cases.jsonl")
     ap.add_argument("--predictions", default=None,
                     help="JSONL of model predictions; omit for gold self-check")
-    ap.add_argument("--vim", default="vim", help="vim binary to use")
+    ap.add_argument("--vim", default=VIM_BIN, help="vim binary to use")
     ap.add_argument("--timeout", type=float, default=5.0)
     ap.add_argument("--exec-log", default=None,
                     help="JSONL to write one execution record per case into")

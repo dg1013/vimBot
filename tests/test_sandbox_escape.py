@@ -138,16 +138,17 @@ def test_isolation_probe_is_not_defeated_by_concurrency():
     pool (~8 workers) every thread but the first read that False and ran vim
     with no OS boundary at all.
     """
-    import importlib
     from concurrent.futures import ThreadPoolExecutor
 
-    import executor as ex_mod
-    importlib.reload(ex_mod)  # clear the cached probe
+    import sandbox
+
+    sandbox._PROBE = None  # clear the cached probe
+    vim = sandbox.resolve_vim("vim.basic")
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(lambda _: ex_mod.isolation_available(), range(8)))
+        results = list(pool.map(lambda _: sandbox.isolation_available(vim), range(8)))
 
-    assert len(set(results)) == 1, (
+    assert results == [True] * 8, (
         "isolation_available() disagreed across threads: %r" % (results,)
     )
 

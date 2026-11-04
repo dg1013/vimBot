@@ -69,6 +69,7 @@ os.environ.setdefault("TORCH_DISABLE_NATIVE_JIT", "1")   # see module docstring
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 from evaluate import load_jsonl, score, write_exec_log   # noqa: E402
+from executor import VIM_BIN  # noqa: E402
 from prompt import messages_for_case, parse_output  # noqa: E402
 
 REGISTRY = REPO / "configs" / "models.yaml"
@@ -232,7 +233,7 @@ def wandb_mode() -> str:
 
 def vim_version() -> str:
     try:
-        out = subprocess.run(["vim", "--version"], capture_output=True, text=True,
+        out = subprocess.run([VIM_BIN, "--version"], capture_output=True, text=True,
                              timeout=10).stdout.splitlines()
         return out[0].strip() if out else "unknown"
     except (OSError, subprocess.SubprocessError):
