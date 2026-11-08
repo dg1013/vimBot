@@ -68,9 +68,15 @@ def verdict(memory, evals, summary, rc, bar=BAR_RESERVED_GIB, min_share=MIN_PARS
         reasons.append("train_27b.py exited %d" % rc)
     if not memory:
         reasons.append("no memory.json: training did not reach its end")
-    elif memory["peak_reserved_gib"] > bar:
-        reasons.append("peak reserved %.2f GiB is over the %.1f GiB bar"
-                       % (memory["peak_reserved_gib"], bar))
+    else:
+        if memory["peak_reserved_gib"] > bar:
+            reasons.append("peak reserved %.2f GiB is over the %.1f GiB bar"
+                           % (memory["peak_reserved_gib"], bar))
+        moved = memory.get("embedding_moved_to_ram_gib") or 0.0
+        drop = (memory.get("allocated_after_load_gib") or 0.0) - (memory.get("allocated_after_patch_gib") or 0.0)
+        if moved and drop < 0.9 * moved:
+            reasons.append("the input embedding did not leave the GPU (allocated fell %.2f GiB, "
+                           "not %.2f)" % (drop, moved))
     last = evals[-1] if evals else None
     if last is None:
         reasons.append("no evaluation ran")

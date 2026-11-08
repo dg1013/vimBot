@@ -87,6 +87,42 @@ def test_swap_leaves_logits_and_generation_unchanged():
         assert torch.equal(model.generate(ids[:1], max_new_tokens=4, do_sample=False), gen)
 
 
+def test_swap_frees_the_old_table():
+    """The first probe's leak: a RamEmbedding method that closed over the original module kept
+    the GPU table alive (allocated 16.44 GiB before and after the swap)."""
+    import gc
+    import weakref
+    model = tiny_model()
+    ref = weakref.ref(model.get_input_embeddings())
+    W.move_input_embedding_to_ram(model)
+    gc.collect()
+    assert ref() is None
+
+
+def test_patched_loader_collects_the_previous_model_first():
+    """train_sft's `del trainer, model` leaves reference cycles; the reload must not meet them."""
+    import gc
+    import weakref
+    prev = tiny_model()
+    ref = weakref.ref(prev)
+    holder = {"model": prev}
+    holder["self"] = holder                      # a cycle, as Trainer and accelerate leave
+    del prev, holder
+    seen = {}
+
+    def orig(reg, q=False):
+        seen["previous_alive"] = ref() is not None
+        return tiny_model()
+
+    gc.disable()                                 # only the loader's own collection may run
+    try:
+        W.patched_load_base(orig)({"name": "tiny"}, True)
+    finally:
+        gc.enable()
+        W.LOAD.clear()
+    assert seen == {"previous_alive": False}
+
+
 def test_lora_trains_through_the_swap_with_checkpointing():
     torch = pytest.importorskip("torch")
     peft = pytest.importorskip("peft")
@@ -142,14 +178,89 @@ def test_wrapper_flags_are_split_from_train_sft_flags():
         ("qwen3.5-27b", True, 4, 8, 204)
 
 
+def test_final_eval_only_takes_train_sft_flags():
+    own, rest = W.build_arg_parser().parse_known_args(
+        ["--final-eval-only", "--model", "qwen3.5-27b", "--load-in-4bit", "--out-dir", "x"])
+    assert own.final_eval_only
+    args = W.train_sft.build_arg_parser().parse_args(rest)
+    assert (args.model, args.load_in_4bit, args.out_dir) == ("qwen3.5-27b", True, "x")
+    for name in ("full_val_eval", "load_registry", "load_jsonl"):  # what final_eval_only calls
+        assert callable(getattr(W.train_sft, name))
+
+
 def test_install_patches_what_train_sft_main_looks_up():
-    orig_load, orig_cb = W.train_sft.load_base, W.train_sft.make_callbacks
+    S = pytest.importorskip("trl.trainer.sft_trainer")
+    orig_load, orig_cb, orig_chunk = W.train_sft.load_base, W.train_sft.make_callbacks, S._chunk
     try:
         W.install(W.build_arg_parser().parse_args([]))
         assert W.train_sft.load_base is not orig_load
         assert W.train_sft.make_callbacks is not orig_cb
+        assert getattr(S._chunk, "lean", False)
+        lean = S._chunk
+        W.install(W.build_arg_parser().parse_args([]))       # idempotent for the chunk
+        assert S._chunk is lean
     finally:
-        W.train_sft.load_base, W.train_sft.make_callbacks = orig_load, orig_cb
+        W.train_sft.load_base, W.train_sft.make_callbacks, S._chunk = orig_load, orig_cb, orig_chunk
+
+
+# ------------------------------------------------------------ patch 3: the lean loss chunk
+
+def chunk_inputs(seed=0):
+    torch = pytest.importorskip("torch")
+    g = torch.Generator().manual_seed(seed)
+    h = torch.randn(48, 64, generator=g).to(torch.bfloat16)
+    w = (torch.randn(700, 64, generator=g) * 0.05).to(torch.bfloat16)
+    lbl = torch.randint(0, 700, (48,), generator=g)
+    lbl[-6:] = -100                                     # a chunk's padded tail
+    return h, w, lbl
+
+
+def test_lean_chunk_is_bf16_logits_then_fp32_softmax():
+    """The arithmetic TRL's chunk performs under CUDA bf16 autocast (measured bit-identical on
+    the GPU, 2026-10-31): a bf16 matmul, then the softmax, loss and metrics in fp32."""
+    torch = pytest.importorskip("torch")
+    S = pytest.importorskip("trl.trainer.sft_trainer")
+    import torch.nn.functional as F
+    h, w, lbl = chunk_inputs()
+    loss, correct, entropy = W.lean_chunk(S)(h, w, None, lbl, 1.0, None)
+    logits = (h @ w.t()).float()
+    assert torch.equal(loss, F.cross_entropy(logits, lbl, ignore_index=-100, reduction="sum"))
+    valid = lbl != -100
+    assert float(correct) == float(((logits.argmax(-1) == lbl) & valid).sum())
+    log_p = F.log_softmax(logits, -1)
+    assert torch.allclose(entropy, (-(log_p.exp() * log_p).sum(-1) * valid).sum())
+
+
+def test_lean_chunk_agrees_with_a_true_fp32_matmul_to_rounding():
+    torch = pytest.importorskip("torch")
+    S = pytest.importorskip("trl.trainer.sft_trainer")
+    h, w, lbl = chunk_inputs(1)
+    lean = W.lean_chunk(S)(h, w, None, lbl, 1.0, None)
+    ref = S._chunk(h, w, None, lbl, 1.0, None) if not getattr(S._chunk, "lean", False) else None
+    if ref is None:
+        pytest.skip("TRL's own chunk is patched in this process")
+    assert abs(float(lean[0]) - float(ref[0])) / float(ref[0]) < 1e-3
+    assert abs(float(lean[2]) - float(ref[2])) / float(ref[2]) < 1e-3
+
+
+def test_trl_chunked_loss_calls_the_lean_chunk_once_installed():
+    torch = pytest.importorskip("torch")
+    S = pytest.importorskip("trl.trainer.sft_trainer")
+    h, w, lbl = chunk_inputs(2)
+    hidden = h.reshape(2, 24, 64)                       # [batch, seq, hidden]
+    labels = torch.full((2, 24), -100)
+    labels[:, 15:] = torch.randint(0, 700, (2, 9))      # the answer tokens
+    orig = S._chunk
+    try:
+        S._chunk = W.lean_chunk(S)
+        loss, correct, entropy, n = S._chunked_cross_entropy_loss(hidden, w, 256, labels=labels)
+    finally:
+        S._chunk = orig
+    shift_h, shift_l = hidden[:, :-1].reshape(-1, 64), labels[:, 1:].reshape(-1)
+    keep = shift_l != -100
+    want = W.lean_chunk(S)(shift_h[keep], w, None, shift_l[keep], 1.0, None)
+    assert int(n) == int(keep.sum()) == 18              # 9 answer tokens x 2 rows
+    assert torch.allclose(loss, want[0] / 18) and float(correct) == float(want[1])
 
 
 def test_paced_guard_extends_the_wall_clock_guard():
@@ -185,6 +296,12 @@ def test_probe_verdict_passes_and_names_every_failure():
     assert any("21.00 GiB is over the 20.5" in r for r in bad["reasons"])
     assert P.verdict(None, [], {"metrics": {}}, 0)["reasons"] == [
         "no memory.json: training did not reach its end", "no evaluation ran"]
+    leaked = dict(mem, embedding_moved_to_ram_gib=2.37, allocated_after_load_gib=16.44,
+                  allocated_after_patch_gib=16.44)
+    assert P.verdict(leaked, ev, {"metrics": {}}, 0)["reasons"] == [
+        "the input embedding did not leave the GPU (allocated fell 0.00 GiB, not 2.37)"]
+    freed = dict(leaked, allocated_after_patch_gib=14.07)
+    assert P.verdict(freed, ev, {"metrics": {}}, 0)["pass"]
 
 
 def test_probe_prepare_writes_both_files(tmp_path):
@@ -218,12 +335,23 @@ def test_report_readings_and_rules():
         assert comp in R.COMPARATORS
 
 
+def test_explore_share_diff_calls_by_the_interval():
+    E = load("qlora27b_explore", HERE / "explore.py")
+    ids = ["r%d" % i for i in range(60)]
+    half = {i: 0.5 for i in ids}
+    assert E.share_diff({i: 1 for i in ids}, half, ids) == {
+        "diff_pts": 50.0, "ci95": [50.0, 50.0], "verdict": "stronger"}
+    assert E.share_diff({i: 0 for i in ids}, half, ids)["verdict"] == "weaker"
+    r = E.share_diff({i: int(k % 2 == 0) for k, i in enumerate(ids)}, half, ids)
+    assert r["diff_pts"] == 0.0 and r["verdict"] == "tied" and r["ci95"][0] < 0 < r["ci95"][1]
+
+
 # ------------------------------------------------------------ contracts
 
 def test_no_model_ids_and_no_thinking_in_this_folder():
     """§4: model ids live in the registry only; §14: thinking stays off.
     (This file is not scanned: it holds the needles.)"""
-    for f in ("train_27b.py", "probe.py", "report.py", "run.sh"):
+    for f in ("train_27b.py", "probe.py", "report.py", "explore.py", "test_report.py", "run.sh"):
         src = (HERE / f).read_text(encoding="utf-8")
         assert "Qwen/" not in src and "hf_id: " not in src, f
         assert "enable_thinking\": True" not in src and "enable_thinking=True" not in src, f

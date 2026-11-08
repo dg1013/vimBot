@@ -110,6 +110,14 @@ train_stage() {
         --train "$TRAIN" --out-dir "$OUT" --batch-size "$mb" --grad-accum $((32 / mb)) \
         --eval-every $every --no-eval-at-start --wandb
     rc=$?
+    if [ ! -f "$OUT/sft_val.json" ] && [ -d "$OUT/final" ]; then
+      # Training finished but the in-process final pass did not: rerun only that pass, in a
+      # fresh process, rather than retraining for hours.
+      status "train: trained, but the final pass failed (rc $rc); rerunning it alone"
+      watched "$OUT/final_eval.log" $PY scripts/qlora27b/train_27b.py --final-eval-only \
+          --model $MODEL --load-in-4bit --train "$TRAIN" --out-dir "$OUT"
+      rc=$?
+    fi
     if [ -f "$OUT/sft_val.json" ]; then
       status "train: done; full val $($PY -c "import json; print(json.load(open('$OUT/sft_val.json'))['metrics']['exec_match_pct'])")%"
       return 0
