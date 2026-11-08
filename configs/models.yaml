@@ -77,6 +77,31 @@ models:
     ref_cost_per_mtok: null
     vllm_extra_args: []
 
+  qwen3.5-27b:                      # teacher candidate (owner, 2026-10-30): dense,
+    hf_id: Qwen/Qwen3.5-27B         # Apache-2.0, tokenizer byte-identical to the 4B/9B;
+    revision: fc05daec18b0a78c049392ed2e771dde82bdf654   # 55.6 GB in bf16, so NF4 at load
+    chat_template_kwargs:           # (~17.7 GB). QLoRA fits with the input embedding in
+      enable_thinking: false        # system RAM (scripts/qlora27b, DECISIONS.md 2026-10-31)
+    stop: ["<|im_end|>"]
+    max_seq_len: 2048
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
+  qwen3.5-27b-think:                # the 27B as a THINKING teacher (owner sign-off,
+    hf_id: Qwen/Qwen3.5-27B         # 2026-10-31, CLAUDE.md §14): the same weights as
+    revision: fc05daec18b0a78c049392ed2e771dde82bdf654   # qwen3.5-27b. Only the teacher
+    chat_template_kwargs:           # thinks, in scripts/think27b; never a student, a
+      enable_thinking: true         # results-table row or a served model (§4)
+    stop: ["<|im_end|>"]
+    max_seq_len: 8192
+    lora_target_modules: all-linear
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+    # Model-card recommended thinking sampling (its generation_config.json at this
+    # revision): temperature 0.6, top_p 0.95, top_k 20. Greedy decoding is advised
+    # against in thinking mode (endless repetition).
+
   qwen3-4b-2507:                    # batch 2 (owner, 2026-09-11): the dense
     hf_id: Qwen/Qwen3-4B-Instruct-2507   # control for the hybrid 4B; instruct-only,
     revision: cdbee75f17c01a7cc42f958dc650907174af0554   # no thinking mode
