@@ -23,7 +23,7 @@ sandboxed headless vim and diff the buffer. That one property gives us
 - **a reward signal** — enabling GRPO-style RL (reinforcement learning) fine-tuning with no reward
   model and no human labels.
 
-Taken together, this repo (repository) is a small but complete **verifiable RL
+Taken together, this project is a small but complete **verifiable RL
 environment** — a task distribution with a controlled difficulty spread,
 a sandboxed execution verifier, and a reward function with anti-gaming
 terms — the same artifact class frontier labs now build and buy at scale
@@ -41,32 +41,32 @@ for post-training.
 | asking first | the served 4B asks one clarifying question when its top sampled answer holds at most 5 of 8 samples: **59.7%** on test v2, asking on 40% of rows (+35 / −12 rows against never asking, McNemar p = 0.001; 2026-10-10) |
 | served, one RTX 3090 | vLLM: the 4B's greedy answer 54.3% at 0.16 s p50 and $0.005 per 1,000 solved; the pooled pick (4 + 4 samples from the 4B and the 9B, the 4B as verifier) **66.0%** at 0.84 s and $0.11 per 1,000 solved, at a stated $0.30 per GPU-hour (2026-10-19/21) |
 | size ablation | identical recipe on 0.8B / 2B / 4B / 9B: full-val exec-match 27.0 / 34.1 / 44.4 / 48.3%; the 4B stays primary (2026-09-10) |
-| tests | **906 green** (2026-10-30): 646 in `tests/`, 260 across the 21 `scripts/` folders, each folder run on its own |
+| tests | **1,676 green** (2026-11-09): 1,057 in `tests/`, 619 across the 41 `scripts/` folders, each folder run on its own; 9 skip by design. A fresh clone has no dataset, so there 1,587 pass and 76 skip (its 14 gold-case checks become one skip) |
 
-Numbers and how each was measured live in `RESULTS.md`; every decision
-behind them is in `DECISIONS.md`, newest first.
+The dataset, its splits and the run outputs behind these numbers are not
+published in this repository.
 
 ## Repo layout
 
 ```
 src/executor.py     sandboxed headless-vim runner (stdlib only) — the oracle
 src/sandbox.py      the box vim runs in, which assumes vim is compromised
+src/scope.py        static screen that refuses damage-capable commands before vim starts
 src/evaluate.py     execution-match eval with per-category breakdown
-src/prompt.py       the §6 model I/O contract, implemented once
+src/prompt.py       the model I/O contract (prompt text and output grammar), implemented once
 src/paste.py        keys-mode output rendered as one pasteable ex line
-data/combined_cases.jsonl   the corpus; data/splits/ holds the frozen splits
-data/seed_cases.jsonl       14 hand-written cases; the schema reference
-data/fixes/         every curation change-set, dated — the audit trail
-scripts/            corpus build, split refresh, curation, review pages
+configs/            the model registry (models.yaml) and the settings file (settings.toml)
+tests/              the core suite: executor, sandbox, screen, eval, data pipeline, training scripts
+scripts/            corpus build and curation, training, serving, one folder per experiment
 ```
 
 ## Quickstart
 
 ```bash
-# needs vim.basic (not vim-tiny) and bubblewrap; python3, stdlib only
-python3 src/evaluate.py --cases data/seed_cases.jsonl          # gold self-check
-python3 src/evaluate.py --cases data/seed_cases.jsonl \
-                        --predictions runs/your_model.jsonl    # score a model
+# needs vim.basic (not vim-tiny), bubblewrap and Python 3.11+; src/ is stdlib only
+python3 src/evaluate.py --cases cases.jsonl                    # gold self-check
+python3 src/evaluate.py --cases cases.jsonl \
+                        --predictions preds.jsonl              # score a model
 
 # try a single command against a real file (the file is never modified)
 python3 src/executor.py --file notes.txt --command '%s/cat/dog/g'
@@ -77,6 +77,12 @@ python3 src/executor.py --file notes.txt --command 'dd' --mode keys --line 2 \
 python3 src/executor.py --show-settings          # what is actually in effect
 python3 src/executor.py --settings my.toml ...   # use a different file
 ```
+
+The corpus is not published, so `cases.jsonl` is a file of your own: one
+JSON object per line with `id`, `category`, `instruction`, `mode` (`ex` or
+`keys`), `buffer_before`, `gold_command`, `buffer_after`, and an optional
+`cursor` (`[line, col]`, default `[1, 1]`). A predictions file holds one
+`{"id", "command"}` object per line.
 
 The self-check runs every case's own gold command and must score 100% —
 it validates the dataset and the executor against each other. Run it in CI (continuous integration).
@@ -90,11 +96,15 @@ cursor position). Output: one command, in one of two modes:
 - **keys** — normal-mode keystrokes with angle-bracket notation
   (`dap`, `ci"error<Esc>`, `<C-a>`)
 
-Scope discipline (v1): single commands, single buffer. No macros (`q`),
-no registers-as-API, no multi-file, no plugins, no `:w`/`:q` (file
+Scope: one command, one buffer, no plugins. The frozen v1 exclusion list
+was replaced on 2026-08-18 by an explicit per-command inventory, each
+behavior measured through the executor, which admitted visual mode
+(charwise, linewise, blockwise), marks, macro recording and expression
+substitutes. Out by construction: multi-file edits, and `:w`/`:q` (file
 persistence is the harness's job, so save/quit commands are *invalid* by
-definition here). Freeze this scope before generating data; scope creep on
-vim's surface area is the main way this project dies.
+definition here). Refused by the scope screen: shell, reading other files,
+`set write`, `:normal`/`:execute`/`:call`, and macro playback (`@`). Named
+registers stay out too, since a request never says which register to use.
 
 ## Sandbox / threat model
 
@@ -103,7 +113,7 @@ user's file, so whatever that file says can steer the commands it samples. The
 sandbox therefore assumes vim itself is compromised, and every call runs in a box
 built with [bubblewrap](https://github.com/containers/bubblewrap) (`src/sandbox.py`):
 
-- an empty, read-only root holding only `/usr`, two devices and a scratch directory,
+- an empty, read-only root holding only `/usr`, the linker cache, two devices and a scratch directory,
   so home directories, drives and sockets do not exist for the process inside
 - no network, no privileges, and its own process list
 - a syscall allowlist of 57 names, with everything else refused
@@ -152,8 +162,9 @@ are measured against it.
 - **Baselines before training** (this ordering is the whole discipline):
   zero-/few-shot scores for a frontier API (application programming interface) model and for the base open
   model. The fine-tune has to beat the base model and approach the
-  frontier model to justify existing; the README results table leads
-  with this comparison.
+  frontier model to justify existing. The frontier rows are deferred for
+  now, since they need API access to measure latency and token counts; the
+  numbers above cover open models only.
 - **SFT (supervised fine-tuning):** QLoRA (quantized low-rank adaptation) on a small open model. Pick by hardware:
   - free/Colab T4 class → 1.5–3B (e.g. Qwen coder-class small models)
   - single 24GB (4090/A10) → 7–8B QLoRA comfortably
@@ -165,9 +176,11 @@ are measured against it.
   GRPO (Group Relative Policy Optimization) reward, and all serving clients are identical across models, so
   swapping in a different LLM is a one-entry config change that yields
   a directly comparable results-table row.
-- **RL (the headline):** GRPO with reward = executes cleanly AND buffer
-  matches (+ small length penalty). TRL's GRPOTrainer + `executor.py` as
-  the reward function. This is RLVR (reinforcement learning from verifiable rewards) — the same recipe behind 2025-era
+- **RL (the headline):** GRPO with reward 1.0 when the buffer matches,
+  plus a small brevity bonus paid only on a match; 0.1 for a valid command
+  that leaves the wrong buffer; 0 for a parse failure, vim error or
+  timeout. TRL's GRPOTrainer + `executor.py` as the reward function. This
+  is RLVR (reinforcement learning from verifiable rewards) — the same recipe behind 2025-era
   reasoning models — on a task where you own the verifier end to end.
 - **Error analysis between rounds:** per-category breakdown → find the
   failure cluster → targeted data. (The same loop as production intent-
@@ -177,20 +190,26 @@ are measured against it.
 
 - Merge LoRA → serve with **vLLM**; report latency/throughput.
 - Quantize to **GGUF (GPT-Generated Unified Format)** so the model runs on CPU (central processing unit) via llama.cpp — enabling
-  the demo: a small **vim/neovim plugin** that sends the instruction +
-  buffer context to the local model and applies the result *with a
-  confirm step and a repair loop* — on error or rejection, the model sees
-  the diff/error and retries once.
+  the demo: a small **neovim plugin** that sends the instruction, buffer
+  and cursor to the local model and *shows the command for the user to
+  run*; it never applies the command itself. Repair is user-driven: if the
+  command errors or is wrong, the user re-invokes with the vim error text,
+  which is appended to the prompt for one retry.
+- **MCP (Model Context Protocol) server** (`scripts/serve/mcp_server.py`):
+  `vimBot_translate` returns the model's command, or a clarifying question
+  when its sampled answers disagree; `vimBot_reply` returns the command
+  after the user answers.
 
 ## Definition of done
 
 README results table (models × {valid%, exec-match%, tokens, latency,
 cost/solved task}), reproducible train/eval scripts, the dataset (or its
-generator), an MCP (Model Context Protocol) server exposing the model + verifier, the plugin demo
+generator), an MCP server exposing the model, the plugin demo
 GIF. That artifact backs resume claims for: synthetic data generation
 (frontier-teacher distillation), QLoRA SFT, RLVR/GRPO, execution-based
 evals, RL-environment design, vLLM serving, quantization, and MCP.
 
 ## License
 
-MIT (code). Dataset license TBD pending source audit.
+Apache-2.0 (code); see `LICENSE`. The dataset is not published here; its
+license is TBD pending a source audit.
