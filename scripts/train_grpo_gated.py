@@ -11,7 +11,7 @@ samples disagree: an all-right or all-wrong group has every advantage at zero
 and returns nothing for the rollouts it cost, and under the DAPO token
 normalization its tokens still sit in the loss denominator, so silent groups
 also shrink the effective step. On the 4B's first run the silent share rose
-from 35% to 56% over the epoch; the realized k(G-k)/G per group averaged 0.53
+from 35% to 55% over the epoch; the realized k(G-k)/G per group averaged 0.53
 against 1.75 for a prompt at p = 1/2 -- the run drew about 30% of the
 gradient its rollouts could have carried, and half the train prompts sat on
 the "known" shelf (8 of 8) by the end.

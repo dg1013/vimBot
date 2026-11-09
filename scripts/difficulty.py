@@ -11,7 +11,7 @@ zero and returns no gradient for the rollouts it cost. For a prompt the
 policy solves with probability p, the expected squared advantage in a group
 of G binary rewards is (G - 1) * p * (1 - p): largest at p = 1/2, zero at
 both ends. Measured on the 4B's first GRPO run (DECISIONS.md 2026-09-14), the
-share of silent groups rose from 35% to 56% over the epoch and the realized
+share of silent groups rose from 35% to 55% over the epoch and the realized
 mean of k(G - k)/G was 0.53 against 1.75 for a prompt at p = 1/2, so the run
 drew about 30% of the gradient its rollouts could have carried.
 
