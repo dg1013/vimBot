@@ -102,6 +102,17 @@ models:
     # revision): temperature 0.6, top_p 0.95, top_k 20. Greedy decoding is advised
     # against in thinking mode (endless repetition).
 
+  qwen3.5-4b-think-train:           # TRAINING-ONLY (owner sign-off 2026-11-08, CLAUDE.md
+    hf_id: Qwen/Qwen3.5-4B          # §4/§14; DECISIONS.md): the 4B's weights, rendering
+    revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a   # R2's reasoning task only
+    chat_template_kwargs:           # (scripts/think_train). The 4B never thinks when it
+      enable_thinking: true         # answers: never a results-table row, an evaluation
+    stop: ["<|im_end|>"]            # or a served model; <think> in an answer stays a
+    max_seq_len: 10240              # format failure. 10,240 = R1's longest prompt plus
+    lora_target_modules: all-linear #   its 8,192-token cap, rounded up.
+    ref_cost_per_mtok: null
+    vllm_extra_args: []
+
   qwen3-4b-2507:                    # batch 2 (owner, 2026-09-11): the dense
     hf_id: Qwen/Qwen3-4B-Instruct-2507   # control for the hybrid 4B; instruct-only,
     revision: cdbee75f17c01a7cc42f958dc650907174af0554   # no thinking mode
